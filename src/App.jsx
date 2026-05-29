@@ -659,12 +659,21 @@ function StockChart({stock,onRangeChange,currentRange,loadingChart}){
 }
 
 // ─── AI MODAL ─────────────────────────────────────────────────────────────────
-function AIModal({stock:init,onClose}){
+function AIModal({stock:init, onClose}){
   const[stock,setStock]=useState(init);
   const[analysis,setAnalysis]=useState("");
   const[loadingAI,setLoadingAI]=useState(true);
   const[loadingChart,setLoadingChart]=useState(false);
+  const[loadingStock,setLoadingStock]=useState(!!init.loading);
   const[range,setRange]=useState(init.currentRange||"3M");
+
+  // When parent passes updated stock (placeholder → real data), sync it
+  useEffect(()=>{
+    if(!init.loading) {
+      setStock(init);
+      setLoadingStock(false);
+    }
+  },[init]);
 
   async function handleRange(r){
     if(r===range)return;
@@ -675,6 +684,8 @@ function AIModal({stock:init,onClose}){
   }
 
   useEffect(()=>{
+    // Don't start AI analysis until we have real data
+    if(init.loading || !init.price) return;
     let cancelled=false;
     async function run(){
       setLoadingAI(true);setAnalysis("");
@@ -744,27 +755,93 @@ ${divContext}`}],
     }
     run();
     return()=>{cancelled=true;};
-  },[init.ticker]);
+  },[init.ticker, init.price]); // re-run when real price arrives
 
   return(
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",backdropFilter:"blur(8px)",zIndex:1000,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"12px",overflowY:"auto"}}>
       <div onClick={e=>e.stopPropagation()} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:"22px 18px",maxWidth:720,width:"100%",marginTop:8,boxShadow:"0 24px 64px rgba(0,0,0,.6)"}}>
 
-        {/* Header */}
+        {/* Header — always visible immediately */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
           <div>
-            <div style={{fontSize:10,color:C.textSub,fontWeight:500,letterSpacing:2,marginBottom:5,textTransform:"uppercase"}}>KI-Analyse · {stock.dataReal?"Live Daten":"Live Kurs"}</div>
+            <div style={{fontSize:10,color:C.textSub,fontWeight:500,letterSpacing:2,marginBottom:5,textTransform:"uppercase"}}>KI-Analyse{loadingStock?" · Lade Daten...":` · ${stock.dataReal?"Live Daten":"Live Kurs"}`}</div>
             <div style={{fontSize:20,fontWeight:700,color:C.text,letterSpacing:-.3,lineHeight:1.2}}>{stock.ticker} <span style={{color:C.textSub,fontWeight:400,fontSize:14}}>{stock.name}</span></div>
             <div style={{display:"flex",gap:10,marginTop:8,alignItems:"center",flexWrap:"wrap"}}>
-              <SignalBadge signal={stock.signal}/>
-              <span style={{fontFamily:"monospace",fontSize:18,fontWeight:700,color:C.text}}>{fmt(stock,stock.price)}</span>
-              <Chg v={stock.change}/>
-              {stock.high&&<span style={{fontSize:11,color:C.textSub}}>H {fmt(stock,stock.high)} · T {fmt(stock,stock.low)}</span>}
-              <span style={{fontSize:10,color:C.textMuted,background:C.border,padding:"2px 7px",borderRadius:4}}>{stock.currency??'USD'}</span>
+              {loadingStock ? (
+                <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                  {[0,1,2].map(i=><div key={i} style={{width:6,height:6,borderRadius:"50%",background:C.accent,animation:`pulse 1.2s ${i*.2}s infinite`}}/>)}
+                  <span style={{fontSize:12,color:C.textSub,marginLeft:4}}>Lade Marktdaten...</span>
+                </div>
+              ) : (
+                <>
+                  <SignalBadge signal={stock.signal}/>
+                  <span style={{fontFamily:"monospace",fontSize:18,fontWeight:700,color:C.text}}>{fmt(stock,stock.price)}</span>
+                  <span style={{fontSize:10,color:C.textMuted,background:C.border,padding:"2px 7px",borderRadius:4}}>{stock.currency??'USD'}</span>
+                </>
+              )}
+            </div>
+
+            {/* Price changes — today + 3M */}
+            {!loadingStock && stock.price && (()=>{
+              const dayChgPct  = stock.change ?? 0;
+              const dayChgAbs  = stock.prevClose ? stock.price - stock.prevClose : null;
+              const firstPrice = stock.chartData?.length > 0 ? stock.chartData[0].price : null;
+              const rangeChgPct = firstPrice ? +((stock.price - firstPrice) / firstPrice * 100).toFixed(2) : null;
+              const rangeChgAbs = firstPrice ? +(stock.price - firstPrice).toFixed(2) : null;
+              const posDay  = dayChgPct >= 0;
+              const posRange = rangeChgPct !== null ? rangeChgPct >= 0 : true;
+              return (
+                <div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>
+                  {/* Today */}
+                  <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 14px",minWidth:130}}>
+                    <div style={{fontSize:9,color:C.textMuted,textTransform:"uppercase",letterSpacing:0.8,marginBottom:4}}>Heute</div>
+                    <div style={{display:"flex",gap:8,alignItems:"baseline"}}>
+                      <span style={{fontFamily:"monospace",fontWeight:700,fontSize:14,color:posDay?C.green:C.red}}>
+                        {posDay?"+":""}{dayChgPct.toFixed(2)}%
+                      </span>
+                      {dayChgAbs!=null&&(
+                        <span style={{fontFamily:"monospace",fontSize:12,color:posDay?C.green+"99":C.red+"99"}}>
+                          {posDay?"+":""}{ccy(stock)}{Math.abs(dayChgAbs).toFixed(2)}
+                        </span>
+                      )}
+                    </div>
+                    {stock.high&&<div style={{fontSize:10,color:C.textMuted,marginTop:3}}>H {fmt(stock,stock.high)} · T {fmt(stock,stock.low)}</div>}
+                  </div>
+                  {/* Range performance */}
+                  {rangeChgPct!=null&&(
+                    <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 14px",minWidth:130}}>
+                      <div style={{fontSize:9,color:C.textMuted,textTransform:"uppercase",letterSpacing:0.8,marginBottom:4}}>{range} Veränderung</div>
+                      <div style={{display:"flex",gap:8,alignItems:"baseline"}}>
+                        <span style={{fontFamily:"monospace",fontWeight:700,fontSize:14,color:posRange?C.green:C.red}}>
+                          {posRange?"+":""}{rangeChgPct}%
+                        </span>
+                        <span style={{fontFamily:"monospace",fontSize:12,color:posRange?C.green+"99":C.red+"99"}}>
+                          {posRange?"+":""}{ccy(stock)}{Math.abs(rangeChgAbs).toFixed(2)}
+                        </span>
+                      </div>
+                      <div style={{fontSize:10,color:C.textMuted,marginTop:3}}>vs. Eröffnung {range}</div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+              )}
             </div>
           </div>
           <button onClick={onClose} style={{background:C.border,border:"none",color:C.textSub,width:32,height:32,borderRadius:8,cursor:"pointer",fontSize:18,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>×</button>
         </div>
+
+        {/* Full loading state while stock data fetches */}
+        {loadingStock ? (
+          <div style={{padding:"60px 0",textAlign:"center"}}>
+            <div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:16}}>
+              {[0,1,2].map(i=><div key={i} style={{width:8,height:8,borderRadius:"50%",background:C.accent,animation:`pulse 1.3s ${i*.25}s infinite`}}/>)}
+            </div>
+            <div style={{fontSize:13,color:C.textSub,marginBottom:6}}>Lade Kursdaten, Chart, Fundamentaldaten...</div>
+            <div style={{fontSize:11,color:C.textMuted}}>Kurse: Finnhub · Chart: Yahoo Finance · Fundamentals: FMP</div>
+          </div>
+        ) : (
+          <>
 
         {/* Chart */}
         <div style={{marginBottom:14}}>
@@ -829,6 +906,7 @@ ${divContext}`}],
           <span style={{fontSize:10,color:C.textMuted}}>Aktualisiert beim Laden</span>
         </div>
         <div style={{marginTop:10,fontSize:10,color:C.textMuted,lineHeight:1.6}}>{DISCLAIMER}</div>
+        </> {/* end of !loadingStock block */}
       </div>
     </div>
   );
@@ -848,7 +926,12 @@ function StockCard({stock,onAnalyze}){
         <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
           <div style={{fontWeight:700,fontFamily:"monospace",fontSize:16,color:C.text}}>{fmt(stock,stock.price)}</div>
           <Chg v={stock.change}/>
-          {stock.high&&<div style={{fontSize:10,color:C.textMuted,marginTop:2}}>H {fmt(stock,stock.high)} · T {fmt(stock,stock.low)}</div>}
+          {stock.prevClose&&stock.price&&(
+            <div style={{fontSize:10,color:stock.change>=0?C.green+"99":C.red+"99",marginTop:1,fontFamily:"monospace"}}>
+              {stock.change>=0?"+":""}{ccy(stock)}{Math.abs(stock.price-stock.prevClose).toFixed(2)}
+            </div>
+          )}
+          {stock.high&&<div style={{fontSize:10,color:C.textMuted,marginTop:1}}>H {fmt(stock,stock.high)} · T {fmt(stock,stock.low)}</div>}
         </div>
       </div>
       <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:10,flexWrap:"wrap"}}>
@@ -921,6 +1004,11 @@ function StockRow({stock,onAnalyze,idx}){
       <div>
         <div style={{fontWeight:600,fontFamily:"monospace",fontSize:13,color:C.text}}>{fmt(stock,stock.price)}</div>
         <Chg v={stock.change}/>
+        {stock.prevClose&&stock.price&&(
+          <div style={{fontSize:9,color:stock.change>=0?C.green+"99":C.red+"99",fontFamily:"monospace"}}>
+            {stock.change>=0?"+":""}{ccy(stock)}{Math.abs(stock.price-stock.prevClose).toFixed(2)}
+          </div>
+        )}
       </div>
       <div><SignalBadge signal={stock.signal}/></div>
       <div>
@@ -1008,12 +1096,37 @@ export default function App(){
     return()=>clearTimeout(t);
   },[searchQuery]);
 
-  async function addFromSearch(item){
-    setQuery("");setSearchRes([]);
-    const existing=stocks.find(s=>s.ticker===item.ticker);
-    if(existing){setSelected(existing);return;}
-    const s=await buildStock(item,"3M");
-    if(s){setStocks(prev=>[s,...prev]);setSelected(s);}
+  async function addFromSearch(item) {
+    setQuery(""); setSearchRes([]);
+
+    // Check if already loaded
+    const existing = stocks.find(s => s.ticker === item.ticker);
+    if (existing) { setSelected(existing); return; }
+
+    // Show modal immediately with a placeholder so user gets instant feedback
+    const placeholder = {
+      ...item,
+      price: null, change: 0, high: null, low: null, prevClose: null,
+      chartData: [], fib: {fib382:0,fib50:0,fib618:0},
+      lastRsi: 50, macdCrossing: "neutral", aboveMA50: null, aboveMA20: null,
+      signal: "HOLD", confidence: 50, stopLossPct: 0.08,
+      entryPrice: null, stopLoss: null,
+      target30: null, target90: null, upside30: 0, upside90: 0,
+      dataReal: false, dataSource: "Lade...", currentRange: "3M",
+      dividend: { paysDividend: false }, fundamentals: null,
+      currency: item.ticker.endsWith(".SW") ? "CHF"
+        : item.ticker.endsWith(".DE")||item.ticker.endsWith(".AS")||item.ticker.endsWith(".PA") ? "EUR"
+        : "USD",
+      loading: true, // flag so modal shows loading state
+    };
+    setSelected(placeholder);
+
+    // Load in background
+    const s = await buildStock(item, "3M");
+    if (s) {
+      setStocks(prev => [s, ...prev]);
+      setSelected(s); // replace placeholder with real data
+    }
   }
 
   const buyCount=stocks.filter(s=>s.signal==="BUY").length;
