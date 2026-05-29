@@ -146,22 +146,33 @@ function parseYahooChart(d, range) {
 }
 
 async function fetchStockData(ticker, chartRange="3mo", chartInterval="1d") {
-  // Fetch chart data for display range AND 2y for dividends — in parallel
-  const [chartData, divData] = await Promise.all([
+  // ── Live quote: ALWAYS from Finnhub (direct, no proxy, real-time) ──────────
+  // Yahoo via proxy can return stale/cached prices — Finnhub is always fresh.
+  const [fhQuote, chartData, divData] = await Promise.all([
+    finnhubGet(`/quote?symbol=${ticker}`),
     yahooChart(ticker, chartRange, chartInterval),
     yahooChart(ticker, "2y", "3mo"),
   ]);
 
-  const chart = parseYahooChart(chartData, chartRange);
+  // Build quote from Finnhub first, fall back to Yahoo if Finnhub fails
+  let quote = null;
+  if (fhQuote?.c && fhQuote.c > 0) {
+    quote = {
+      price:     fhQuote.c,
+      change:    fhQuote.dp ?? 0,
+      prevClose: fhQuote.pc,
+      high:      fhQuote.h,
+      low:       fhQuote.l,
+    };
+  }
+
+  // Yahoo chart — used for candles + dividends only, NOT for the price
+  const chart     = parseYahooChart(chartData, chartRange);
   const divParsed = parseYahooChart(divData, "2y");
 
-  // Quote: from chart, fallback to Finnhub
-  let quote = chart?.quote ?? null;
-  if (!quote?.price) {
-    const fh = await finnhubGet(`/quote?symbol=${ticker}`);
-    if (fh?.c && fh.c > 0) {
-      quote = { price: fh.c, change: fh.dp, prevClose: fh.pc, high: fh.h, low: fh.l };
-    }
+  // If Finnhub failed entirely, fall back to Yahoo price (last resort)
+  if (!quote?.price && chart?.quote?.price) {
+    quote = chart.quote;
   }
   if (!quote?.price) return null;
 
