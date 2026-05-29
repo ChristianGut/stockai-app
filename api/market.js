@@ -25,8 +25,7 @@ export default async function handler(req, res) {
         const r = await fetch(url, {
           headers: {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "application/json",
             "Referer": "https://finance.yahoo.com",
           }
         });
@@ -46,41 +45,29 @@ export default async function handler(req, res) {
       }
 
       case "fundamentals": {
-        if (!FMP_KEY) return res.json({ ok: false, error: "FMP key missing in environment" });
+        if (!FMP_KEY) return res.json({ ok: false, error: "FMP key missing" });
 
         const base = ticker.split(".")[0];
         const tryTickers = ticker.includes(".") ? [base, ticker] : [ticker];
 
-        // Debug: show what we're trying
-        const debug = { trying: tryTickers, fmpKeyLength: FMP_KEY.length, fmpKeyStart: FMP_KEY.substring(0, 4) };
-
         for (const t of tryTickers) {
-          const profileUrl = `https://financialmodelingprep.com/api/v3/profile/${t}?apikey=${FMP_KEY}`;
-          const ratiosUrl  = `https://financialmodelingprep.com/api/v3/ratios-ttm/${t}?apikey=${FMP_KEY}`;
-          const analystUrl = `https://financialmodelingprep.com/api/v3/price-target-consensus/${t}?apikey=${FMP_KEY}`;
-
+          // NEW stable endpoints (required for accounts created after Aug 2025)
           const [pRes, rRes, aRes] = await Promise.all([
-            fetch(profileUrl),
-            fetch(ratiosUrl),
-            fetch(analystUrl),
+            fetch(`https://financialmodelingprep.com/stable/profile?symbol=${t}&apikey=${FMP_KEY}`),
+            fetch(`https://financialmodelingprep.com/stable/ratios-ttm?symbol=${t}&apikey=${FMP_KEY}`),
+            fetch(`https://financialmodelingprep.com/stable/price-target-consensus?symbol=${t}&apikey=${FMP_KEY}`),
           ]);
 
           const [profile, ratios, analyst] = await Promise.all([
-            pRes.json().catch(e => ({ parseError: e.message })),
-            rRes.json().catch(e => ({ parseError: e.message })),
-            aRes.json().catch(e => ({ parseError: e.message })),
+            pRes.json().catch(() => null),
+            rRes.json().catch(() => null),
+            aRes.json().catch(() => null),
           ]);
 
-          // Check if FMP returned an error message
-          if (profile?.["Error Message"]) {
-            return res.json({ ok: false, error: profile["Error Message"], debug });
-          }
+          if (profile?.["Error Message"]) continue;
 
-          const p = Array.isArray(profile) ? profile[0] : null;
-          if (!p?.symbol) {
-            // Return raw response for debugging
-            return res.json({ ok: false, error: "No profile data", rawProfile: profile, debug });
-          }
+          const p = Array.isArray(profile) ? profile[0] : (profile?.symbol ? profile : null);
+          if (!p?.symbol) continue;
 
           const r = Array.isArray(ratios)  ? ratios[0]  : (ratios || {});
           const a = Array.isArray(analyst) ? analyst[0] : (analyst || {});
@@ -88,7 +75,7 @@ export default async function handler(req, res) {
           return res.json({ ok: true, ticker: t, profile: p, ratios: r, analyst: a });
         }
 
-        return res.json({ ok: false, error: "Ticker not found in FMP", debug });
+        return res.json({ ok: false, error: "Not found in FMP" });
       }
 
       default:
