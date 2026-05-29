@@ -17,29 +17,40 @@ const C = {
 
 // ─── WATCHLIST ────────────────────────────────────────────────────────────────
 const DEFAULT_TICKERS = [
-  { ticker:"NVDA",    name:"NVIDIA Corp.",          sector:"Semiconductors"     },
-  { ticker:"AAPL",    name:"Apple Inc.",             sector:"Consumer Tech"      },
-  { ticker:"MSFT",    name:"Microsoft Corp.",        sector:"Cloud / Software"   },
-  { ticker:"AMZN",    name:"Amazon.com Inc.",        sector:"E-Commerce"         },
-  { ticker:"META",    name:"Meta Platforms",         sector:"Social Media"       },
-  { ticker:"TSLA",    name:"Tesla Inc.",             sector:"Automotive"         },
-  { ticker:"GOOGL",   name:"Alphabet Inc.",          sector:"Internet"           },
-  { ticker:"AMD",     name:"Advanced Micro Devices", sector:"Semiconductors"     },
-  { ticker:"PLTR",    name:"Palantir Technologies",  sector:"AI / Data"          },
-  { ticker:"ASML",    name:"ASML Holding NV",        sector:"Semiconductors"     },
-  { ticker:"TSM",     name:"Taiwan Semiconductor",   sector:"Semiconductors"     },
-  { ticker:"NVO",     name:"Novo Nordisk A/S",       sector:"Pharmaceuticals"    },
-  { ticker:"SAP",     name:"SAP SE",                 sector:"Enterprise Software"},
-  { ticker:"NESN.SW", name:"Nestlé SA",              sector:"Consumer Staples"   },
-  { ticker:"NOVN.SW", name:"Novartis AG",            sector:"Pharmaceuticals"    },
-  { ticker:"ROG.SW",  name:"Roche Holding AG",       sector:"Pharmaceuticals"    },
-  { ticker:"COIN",    name:"Coinbase Global",        sector:"Crypto / Fintech"   },
-  { ticker:"SNOW",    name:"Snowflake Inc.",         sector:"Cloud Data"         },
-  { ticker:"CRWD",    name:"CrowdStrike Holdings",   sector:"Cybersecurity"      },
-  { ticker:"RBLX",    name:"Roblox Corp.",           sector:"Gaming"             },
+  { ticker:"NVDA",    name:"NVIDIA Corp.",          sector:"Semiconductors",      currency:"USD" },
+  { ticker:"AAPL",    name:"Apple Inc.",             sector:"Consumer Tech",       currency:"USD" },
+  { ticker:"MSFT",    name:"Microsoft Corp.",        sector:"Cloud / Software",    currency:"USD" },
+  { ticker:"AMZN",    name:"Amazon.com Inc.",        sector:"E-Commerce",          currency:"USD" },
+  { ticker:"META",    name:"Meta Platforms",         sector:"Social Media",        currency:"USD" },
+  { ticker:"TSLA",    name:"Tesla Inc.",             sector:"Automotive",          currency:"USD" },
+  { ticker:"GOOGL",   name:"Alphabet Inc.",          sector:"Internet",            currency:"USD" },
+  { ticker:"AMD",     name:"Advanced Micro Devices", sector:"Semiconductors",      currency:"USD" },
+  { ticker:"PLTR",    name:"Palantir Technologies",  sector:"AI / Data",           currency:"USD" },
+  { ticker:"ASML",    name:"ASML Holding NV",        sector:"Semiconductors",      currency:"USD" },
+  { ticker:"TSM",     name:"Taiwan Semiconductor",   sector:"Semiconductors",      currency:"USD" },
+  { ticker:"NVO",     name:"Novo Nordisk A/S",       sector:"Pharmaceuticals",     currency:"USD" },
+  { ticker:"SAP",     name:"SAP SE",                 sector:"Enterprise Software", currency:"USD" },
+  { ticker:"NESN.SW", name:"Nestlé SA",              sector:"Consumer Staples",    currency:"CHF" },
+  { ticker:"NOVN.SW", name:"Novartis AG",            sector:"Pharmaceuticals",     currency:"CHF" },
+  { ticker:"ROG.SW",  name:"Roche Holding AG",       sector:"Pharmaceuticals",     currency:"CHF" },
+  { ticker:"COIN",    name:"Coinbase Global",        sector:"Crypto / Fintech",    currency:"USD" },
+  { ticker:"SNOW",    name:"Snowflake Inc.",         sector:"Cloud Data",          currency:"USD" },
+  { ticker:"CRWD",    name:"CrowdStrike Holdings",   sector:"Cybersecurity",       currency:"USD" },
+  { ticker:"RBLX",    name:"Roblox Corp.",           sector:"Gaming",              currency:"USD" },
 ];
 
 const DISCLAIMER = "All content is for informational purposes only and does not constitute investment advice. AI analyses are based on historical data. Past performance is not indicative of future results. Capital is at risk.";
+
+// Currency symbol helper
+function ccy(stock) {
+  const c = stock?.currency ?? "USD";
+  return c === "CHF" ? "CHF " : c === "EUR" ? "€" : "$";
+}
+
+function fmt(stock, price) {
+  if (price == null) return "—";
+  return ccy(stock) + price.toFixed(2);
+}
 
 const TIME_RANGES = [
   { label:"1D", range:"1d",  interval:"5m"  },
@@ -618,9 +629,9 @@ Dividende: ${stock.dividend?.paysDividend?"Ja, "+stock.dividend.yieldPct+"% Rend
             <div style={{fontSize:20,fontWeight:700,color:C.text,letterSpacing:-.3,lineHeight:1.2}}>{stock.ticker} <span style={{color:C.textSub,fontWeight:400,fontSize:14}}>{stock.name}</span></div>
             <div style={{display:"flex",gap:10,marginTop:8,alignItems:"center",flexWrap:"wrap"}}>
               <SignalBadge signal={stock.signal}/>
-              <span style={{fontFamily:"monospace",fontSize:18,fontWeight:700,color:C.text}}>${stock.price.toFixed(2)}</span>
+              <span style={{fontFamily:"monospace",fontSize:18,fontWeight:700,color:C.text}}>{fmt(stock, stock.price)}</span>
               <Chg v={stock.change}/>
-              {stock.high&&<span style={{fontSize:11,color:C.textSub}}>H ${stock.high.toFixed(2)} · T ${stock.low?.toFixed(2)}</span>}
+              {stock.high&&<span style={{fontSize:11,color:C.textSub}}>H {fmt(stock, stock.high)} · T {fmt(stock, stock.low)}</span>}
             </div>
           </div>
           <button onClick={onClose} style={{background:C.border,border:"none",color:C.textSub,width:32,height:32,borderRadius:8,cursor:"pointer",fontSize:18,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>×</button>
@@ -642,8 +653,8 @@ Dividende: ${stock.dividend?.paysDividend?"Ja, "+stock.dividend.yieldPct+"% Rend
           {[
             {l:"RSI (14)", info:INDICATOR_INFO.RSI, v:stock.lastRsi, s:stock.lastRsi>70?"Überkauft":stock.lastRsi<30?"Überverkauft":"Neutral", c:stock.lastRsi>70?C.red:stock.lastRsi<30?C.green:C.textSub},
             {l:"MACD",    info:INDICATOR_INFO.MACD, v:stock.macdCrossing==="bullish"?"Bullish":"Bearish", s:"Trendkreuzung", c:stock.macdCrossing==="bullish"?C.green:C.red},
-            {l:"Einstieg (Fib)", info:INDICATOR_INFO.Entry, v:stock.entryPrice?`$${stock.entryPrice}`:"—", s:"Support-Level", c:C.purple},
-            {l:"Stop Loss", info:INDICATOR_INFO.StopLoss, v:`$${stock.stopLoss}`, s:`-${(stock.stopLossPct*100).toFixed(1)}% Verlustgrenze`, c:C.red},
+            {l:"Einstieg (Fib)", info:INDICATOR_INFO.Entry, v:stock.entryPrice?fmt(stock,stock.entryPrice):"—", s:"Support-Level", c:C.purple},
+            {l:"Stop Loss", info:INDICATOR_INFO.StopLoss, v:fmt(stock,stock.stopLoss), s:`-${(stock.stopLossPct*100).toFixed(1)}% Verlustgrenze`, c:C.red},
           ].map((item,i)=>(
             <div key={i} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"11px 14px"}}>
               <div style={{fontSize:10,color:C.textSub,fontWeight:500,marginBottom:5,textTransform:"uppercase",letterSpacing:0.5,display:"flex",alignItems:"center"}}>
@@ -658,8 +669,8 @@ Dividende: ${stock.dividend?.paysDividend?"Ja, "+stock.dividend.yieldPct+"% Rend
         {/* Targets */}
         <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8,marginBottom:12}}>
           {[
-            {l:"Kursziel 30 Tage",v:`$${stock.target30}`,u:stock.upside30,c:C.green+"20",b:C.green+"25"},
-            {l:"Kursziel 90 Tage",v:`$${stock.target90}`,u:stock.upside90,c:C.accent+"15",b:C.accent+"25"},
+            {l:"Kursziel 30 Tage",v:fmt(stock,stock.target30),u:stock.upside30,c:C.green+"20",b:C.green+"25"},
+            {l:"Kursziel 90 Tage",v:fmt(stock,stock.target90),u:stock.upside90,c:C.accent+"15",b:C.accent+"25"},
           ].map((t,i)=>(
             <div key={i} style={{background:t.c,border:`1px solid ${t.b}`,borderRadius:8,padding:"12px 14px"}}>
               <div style={{fontSize:10,color:C.textSub,fontWeight:500,marginBottom:5,textTransform:"uppercase",letterSpacing:0.5}}>{t.l}</div>
@@ -824,12 +835,12 @@ function StockCard({stock, onAnalyze}) {
         <div style={{ background: C.bg, borderRadius: 8, padding: "10px 12px", border: `1px solid ${C.border}` }}>
           <div style={{ fontSize: 9, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 3 }}>Einstieg (Fib)</div>
           <div style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 14, color: C.purple }}>
-            {stock.entryPrice ? `$${stock.entryPrice}` : "—"}
+            {stock.entryPrice ? `${ccy(stock)}${stock.entryPrice}` : "—"}
           </div>
         </div>
         <div style={{ background: C.bg, borderRadius: 8, padding: "10px 12px", border: `1px solid ${C.border}` }}>
           <div style={{ fontSize: 9, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 3 }}>Stop-Loss</div>
-          <div style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 14, color: C.red }}>${stock.stopLoss}</div>
+          <div style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 14, color: C.red }}>{fmt(stock, stock.stopLoss)}</div>
         </div>
       </div>
 
@@ -837,12 +848,12 @@ function StockCard({stock, onAnalyze}) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
         <div style={{ background: C.green + "0d", borderRadius: 8, padding: "10px 12px", border: `1px solid ${C.green}25` }}>
           <div style={{ fontSize: 9, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 3 }}>Ziel 30 Tage</div>
-          <div style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 14, color: C.text }}>${stock.target30}</div>
+          <div style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 14, color: C.text }}>{fmt(stock, stock.target30)}</div>
           <span style={{ fontSize: 11, color: stock.upside30 >= 0 ? C.green : C.red, fontWeight: 600 }}>{stock.upside30 >= 0 ? "+" : ""}{stock.upside30}%</span>
         </div>
         <div style={{ background: C.accent + "0d", borderRadius: 8, padding: "10px 12px", border: `1px solid ${C.accent}25` }}>
           <div style={{ fontSize: 9, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 3 }}>Ziel 90 Tage</div>
-          <div style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 14, color: C.text }}>${stock.target90}</div>
+          <div style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 14, color: C.text }}>{fmt(stock, stock.target90)}</div>
           <span style={{ fontSize: 11, color: stock.upside90 >= 0 ? C.green : C.red, fontWeight: 600 }}>{stock.upside90 >= 0 ? "+" : ""}{stock.upside90}%</span>
         </div>
       </div>
@@ -853,7 +864,7 @@ function StockCard({stock, onAnalyze}) {
           <div style={{ fontSize: 9, color: C.amber, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600, marginBottom: 6 }}>Dividende</div>
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
             <span style={{ fontSize: 12, color: C.text }}>Rendite: <strong style={{ color: C.amber }}>{stock.dividend.yieldPct != null ? stock.dividend.yieldPct + "%" : "—"}</strong></span>
-            <span style={{ fontSize: 12, color: C.text }}>Zahlung: <strong style={{ fontFamily: "monospace" }}>{stock.dividend.lastAmount != null ? "$" + stock.dividend.lastAmount.toFixed(4) : "—"}</strong></span>
+            <span style={{ fontSize: 12, color: C.text }}>Zahlung: <strong style={{ fontFamily: "monospace" }}>{stock.dividend.lastAmount != null ? ccy(stock) + stock.dividend.lastAmount.toFixed(4) : "—"}</strong></span>
             <span style={{ fontSize: 12, color: C.text }}>{stock.dividend.frequency ?? ""}</span>
           </div>
         </div>
@@ -881,7 +892,7 @@ function StockRow({stock,onAnalyze,idx}){
       </div>
       <div style={{fontSize:12,color:"#9ca3af",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",paddingRight:8}}>{stock.name}</div>
       <div>
-        <div style={{fontWeight:600,fontFamily:"monospace",fontSize:13,color:C.text}}>${stock.price.toFixed(2)}</div>
+        <div style={{fontWeight:600,fontFamily:"monospace",fontSize:13,color:C.text}}>{fmt(stock, stock.price)}</div>
         <Chg v={stock.change}/>
       </div>
       <div><SignalBadge signal={stock.signal}/></div>
@@ -891,10 +902,10 @@ function StockRow({stock,onAnalyze,idx}){
       </div>
       <div><DividendCompact div={stock.dividend}/></div>
       <div>
-        {stock.entryPrice?<><div style={{fontFamily:"monospace",fontWeight:600,fontSize:12,color:C.purple}}>${stock.entryPrice}</div><div style={{fontSize:9,color:C.textMuted}}>Fib</div></>:<span style={{color:C.textMuted,fontSize:12}}>—</span>}
+        {stock.entryPrice?<><div style={{fontFamily:"monospace",fontWeight:600,fontSize:12,color:C.purple}}>{fmt(stock, stock.entryPrice)}</div><div style={{fontSize:9,color:C.textMuted}}>Fib</div></>:<span style={{color:C.textMuted,fontSize:12}}>—</span>}
       </div>
       <div>
-        <div style={{fontFamily:"monospace",fontWeight:600,fontSize:12,color:C.text}}>${stock.target30}</div>
+        <div style={{fontFamily:"monospace",fontWeight:600,fontSize:12,color:C.text}}>{fmt(stock, stock.target30)}</div>
         <span style={{color:stock.upside30>=0?C.green:C.red,fontSize:11,fontWeight:500}}>{stock.upside30>=0?"+":""}{stock.upside30}%</span>
       </div>
       <div>
@@ -1007,7 +1018,7 @@ export default function App(){
             {stocks.slice(0,4).map(s=>(
               <span key={s.ticker} onClick={()=>setSelected(s)} style={{cursor:"pointer"}}>
                 <span style={{color:C.textMuted,marginRight:5,fontSize:11}}>{s.ticker}</span>
-                <span style={{fontFamily:"monospace",fontWeight:600,color:C.text}}>${s.price.toFixed(0)}</span>
+                <span style={{fontFamily:"monospace",fontWeight:600,color:C.text}}>{ccy(s)}{s.price.toFixed(0)}</span>
                 <span style={{marginLeft:4,color:s.change>=0?C.green:C.red}}>{s.change>=0?"+":""}{s.change.toFixed(1)}%</span>
               </span>
             ))}
