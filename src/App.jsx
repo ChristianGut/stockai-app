@@ -757,43 +757,47 @@ ${divContext}`}],
     return()=>{cancelled=true;};
   },[init.ticker, init.price]); // re-run when real price arrives
 
-  return(
+  // Compute price change stats (used in header)
+  const dayChgPct  = stock.change ?? 0;
+  const dayChgAbs  = stock.prevClose && stock.price ? stock.price - stock.prevClose : null;
+  const firstPrice = stock.chartData?.length > 0 ? stock.chartData[0].price : null;
+  const rangeChgPct = firstPrice && stock.price ? +((stock.price - firstPrice) / firstPrice * 100).toFixed(2) : null;
+  const rangeChgAbs = firstPrice && stock.price ? +(stock.price - firstPrice).toFixed(2) : null;
+  const posDay   = dayChgPct >= 0;
+  const posRange = rangeChgPct !== null ? rangeChgPct >= 0 : true;
+
+  return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",backdropFilter:"blur(8px)",zIndex:1000,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"12px",overflowY:"auto"}}>
       <div onClick={e=>e.stopPropagation()} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:"22px 18px",maxWidth:720,width:"100%",marginTop:8,boxShadow:"0 24px 64px rgba(0,0,0,.6)"}}>
 
-        {/* Header — always visible immediately */}
+        {/* ── HEADER ── */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
-          <div>
-            <div style={{fontSize:10,color:C.textSub,fontWeight:500,letterSpacing:2,marginBottom:5,textTransform:"uppercase"}}>KI-Analyse{loadingStock?" · Lade Daten...":` · ${stock.dataReal?"Live Daten":"Live Kurs"}`}</div>
-            <div style={{fontSize:20,fontWeight:700,color:C.text,letterSpacing:-.3,lineHeight:1.2}}>{stock.ticker} <span style={{color:C.textSub,fontWeight:400,fontSize:14}}>{stock.name}</span></div>
-            <div style={{display:"flex",gap:10,marginTop:8,alignItems:"center",flexWrap:"wrap"}}>
-              {loadingStock ? (
-                <div style={{display:"flex",gap:5,alignItems:"center"}}>
-                  {[0,1,2].map(i=><div key={i} style={{width:6,height:6,borderRadius:"50%",background:C.accent,animation:`pulse 1.2s ${i*.2}s infinite`}}/>)}
-                  <span style={{fontSize:12,color:C.textSub,marginLeft:4}}>Lade Marktdaten...</span>
-                </div>
-              ) : (
-                <>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:10,color:C.textSub,fontWeight:500,letterSpacing:2,marginBottom:5,textTransform:"uppercase"}}>
+              KI-Analyse{loadingStock?" · Lade Daten...":` · ${stock.dataReal?"Live Daten":"Live Kurs"}`}
+            </div>
+            <div style={{fontSize:20,fontWeight:700,color:C.text,letterSpacing:-.3,lineHeight:1.2}}>
+              {stock.ticker} <span style={{color:C.textSub,fontWeight:400,fontSize:14}}>{stock.name}</span>
+            </div>
+
+            {loadingStock ? (
+              <div style={{display:"flex",gap:5,alignItems:"center",marginTop:10}}>
+                {[0,1,2].map(i=><div key={i} style={{width:6,height:6,borderRadius:"50%",background:C.accent,animation:`pulse 1.2s ${i*.2}s infinite`}}/>)}
+                <span style={{fontSize:12,color:C.textSub,marginLeft:4}}>Lade Marktdaten...</span>
+              </div>
+            ) : (
+              <>
+                {/* Signal + Price + Currency */}
+                <div style={{display:"flex",gap:10,marginTop:8,alignItems:"center",flexWrap:"wrap"}}>
                   <SignalBadge signal={stock.signal}/>
                   <span style={{fontFamily:"monospace",fontSize:18,fontWeight:700,color:C.text}}>{fmt(stock,stock.price)}</span>
                   <span style={{fontSize:10,color:C.textMuted,background:C.border,padding:"2px 7px",borderRadius:4}}>{stock.currency??'USD'}</span>
-                </>
-              )}
-            </div>
+                </div>
 
-            {/* Price changes — today + 3M */}
-            {!loadingStock && stock.price && (()=>{
-              const dayChgPct  = stock.change ?? 0;
-              const dayChgAbs  = stock.prevClose ? stock.price - stock.prevClose : null;
-              const firstPrice = stock.chartData?.length > 0 ? stock.chartData[0].price : null;
-              const rangeChgPct = firstPrice ? +((stock.price - firstPrice) / firstPrice * 100).toFixed(2) : null;
-              const rangeChgAbs = firstPrice ? +(stock.price - firstPrice).toFixed(2) : null;
-              const posDay  = dayChgPct >= 0;
-              const posRange = rangeChgPct !== null ? rangeChgPct >= 0 : true;
-              return (
-                <div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>
+                {/* Today + Range change boxes */}
+                <div style={{display:"flex",gap:10,marginTop:10,flexWrap:"wrap"}}>
                   {/* Today */}
-                  <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 14px",minWidth:130}}>
+                  <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 14px",minWidth:120}}>
                     <div style={{fontSize:9,color:C.textMuted,textTransform:"uppercase",letterSpacing:0.8,marginBottom:4}}>Heute</div>
                     <div style={{display:"flex",gap:8,alignItems:"baseline"}}>
                       <span style={{fontFamily:"monospace",fontWeight:700,fontSize:14,color:posDay?C.green:C.red}}>
@@ -805,11 +809,16 @@ ${divContext}`}],
                         </span>
                       )}
                     </div>
-                    {stock.high&&<div style={{fontSize:10,color:C.textMuted,marginTop:3}}>H {fmt(stock,stock.high)} · T {fmt(stock,stock.low)}</div>}
+                    {stock.high&&(
+                      <div style={{fontSize:10,color:C.textMuted,marginTop:3}}>
+                        H {fmt(stock,stock.high)} · T {fmt(stock,stock.low)}
+                      </div>
+                    )}
                   </div>
-                  {/* Range performance */}
+
+                  {/* Range change */}
                   {rangeChgPct!=null&&(
-                    <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 14px",minWidth:130}}>
+                    <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 14px",minWidth:120}}>
                       <div style={{fontSize:9,color:C.textMuted,textTransform:"uppercase",letterSpacing:0.8,marginBottom:4}}>{range} Veränderung</div>
                       <div style={{display:"flex",gap:8,alignItems:"baseline"}}>
                         <span style={{fontFamily:"monospace",fontWeight:700,fontSize:14,color:posRange?C.green:C.red}}>
@@ -819,94 +828,97 @@ ${divContext}`}],
                           {posRange?"+":""}{ccy(stock)}{Math.abs(rangeChgAbs).toFixed(2)}
                         </span>
                       </div>
-                      <div style={{fontSize:10,color:C.textMuted,marginTop:3}}>vs. Eröffnung {range}</div>
+                      <div style={{fontSize:10,color:C.textMuted,marginTop:3}}>vs. Periodenanfang</div>
                     </div>
                   )}
                 </div>
-              );
-            })()}
-              )}
-            </div>
+              </>
+            )}
           </div>
-          <button onClick={onClose} style={{background:C.border,border:"none",color:C.textSub,width:32,height:32,borderRadius:8,cursor:"pointer",fontSize:18,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>×</button>
+          <button onClick={onClose} style={{background:C.border,border:"none",color:C.textSub,width:32,height:32,borderRadius:8,cursor:"pointer",fontSize:18,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginLeft:12}}>×</button>
         </div>
 
-        {/* Full loading state while stock data fetches */}
+        {/* ── LOADING STATE ── */}
         {loadingStock ? (
           <div style={{padding:"60px 0",textAlign:"center"}}>
             <div style={{display:"flex",gap:6,justifyContent:"center",marginBottom:16}}>
               {[0,1,2].map(i=><div key={i} style={{width:8,height:8,borderRadius:"50%",background:C.accent,animation:`pulse 1.3s ${i*.25}s infinite`}}/>)}
             </div>
             <div style={{fontSize:13,color:C.textSub,marginBottom:6}}>Lade Kursdaten, Chart, Fundamentaldaten...</div>
-            <div style={{fontSize:11,color:C.textMuted}}>Kurse: Finnhub · Chart: Yahoo Finance · Fundamentals: FMP</div>
+            <div style={{fontSize:11,color:C.textMuted}}>Finnhub · Yahoo Finance · Financial Modeling Prep</div>
           </div>
         ) : (
           <>
-
-        {/* Chart */}
-        <div style={{marginBottom:14}}>
-          <StockChart key={`${stock.ticker}-${range}`} stock={stock} onRangeChange={handleRange} currentRange={range} loadingChart={loadingChart}/>
-        </div>
-
-        {/* Technical indicators */}
-        <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8,marginBottom:14}}>
-          {[
-            {l:"RSI (14)",      info:INDICATOR_INFO.RSI,      v:stock.lastRsi, s:stock.lastRsi>70?"Überkauft":stock.lastRsi<30?"Überverkauft":"Neutral", c:stock.lastRsi>70?C.red:stock.lastRsi<30?C.green:C.textSub},
-            {l:"MACD",         info:INDICATOR_INFO.MACD,     v:stock.macdCrossing==="bullish"?"Bullish":"Bearish", s:"Trendkreuzung", c:stock.macdCrossing==="bullish"?C.green:C.red},
-            {l:"Einstieg (Fib)",info:INDICATOR_INFO.Entry,   v:stock.entryPrice?fmt(stock,stock.entryPrice):"—", s:"Support-Level", c:C.purple},
-            {l:"Stop-Loss",    info:INDICATOR_INFO.StopLoss, v:fmt(stock,stock.stopLoss), s:`-${(stock.stopLossPct*100).toFixed(1)}%`, c:C.red},
-          ].map((item,i)=>(
-            <div key={i} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"11px 14px"}}>
-              <div style={{fontSize:10,color:C.textSub,fontWeight:500,marginBottom:5,textTransform:"uppercase",letterSpacing:0.5,display:"flex",alignItems:"center"}}>{item.l}<InfoTooltip text={item.info}/></div>
-              <div style={{fontSize:14,fontWeight:700,color:item.c,fontFamily:"monospace"}}>{item.v}</div>
-              <div style={{fontSize:9,color:C.textMuted,marginTop:2}}>{item.s}</div>
+            {/* Chart */}
+            <div style={{marginBottom:14}}>
+              <StockChart key={`${stock.ticker}-${range}`} stock={stock} onRangeChange={handleRange} currentRange={range} loadingChart={loadingChart}/>
             </div>
-          ))}
-        </div>
 
-        {/* Targets */}
-        <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8,marginBottom:14}}>
-          {[
-            {l:"Kursziel 30 Tage",v:fmt(stock,stock.target30),u:stock.upside30,c:C.green+"20",b:C.green+"25"},
-            {l:"Kursziel 90 Tage",v:fmt(stock,stock.target90),u:stock.upside90,c:C.accent+"15",b:C.accent+"25"},
-          ].map((t,i)=>(
-            <div key={i} style={{background:t.c,border:`1px solid ${t.b}`,borderRadius:8,padding:"12px 14px"}}>
-              <div style={{fontSize:10,color:C.textSub,fontWeight:500,marginBottom:5,textTransform:"uppercase",letterSpacing:0.5}}>{t.l}</div>
-              <div style={{display:"flex",alignItems:"baseline",gap:8}}>
-                <span style={{fontSize:18,fontWeight:700,fontFamily:"monospace",color:C.text}}>{t.v}</span>
-                <span style={{color:t.u>=0?C.green:C.red,fontSize:12,fontWeight:600}}>{t.u>=0?"+":""}{t.u}%</span>
+            {/* Technical indicators */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8,marginBottom:14}}>
+              {[
+                {l:"RSI (14)",       info:INDICATOR_INFO.RSI,      v:stock.lastRsi,                                         s:stock.lastRsi>70?"Überkauft":stock.lastRsi<30?"Überverkauft":"Neutral", c:stock.lastRsi>70?C.red:stock.lastRsi<30?C.green:C.textSub},
+                {l:"MACD",          info:INDICATOR_INFO.MACD,     v:stock.macdCrossing==="bullish"?"Bullish":"Bearish",     s:"Trendkreuzung",  c:stock.macdCrossing==="bullish"?C.green:C.red},
+                {l:"Einstieg (Fib)",info:INDICATOR_INFO.Entry,    v:stock.entryPrice?fmt(stock,stock.entryPrice):"—",       s:"Support-Level",  c:C.purple},
+                {l:"Stop-Loss",     info:INDICATOR_INFO.StopLoss, v:fmt(stock,stock.stopLoss),                              s:`-${(stock.stopLossPct*100).toFixed(1)}%`, c:C.red},
+              ].map((item,i)=>(
+                <div key={i} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"11px 14px"}}>
+                  <div style={{fontSize:10,color:C.textSub,fontWeight:500,marginBottom:5,textTransform:"uppercase",letterSpacing:0.5,display:"flex",alignItems:"center"}}>{item.l}<InfoTooltip text={item.info}/></div>
+                  <div style={{fontSize:14,fontWeight:700,color:item.c,fontFamily:"monospace"}}>{item.v}</div>
+                  <div style={{fontSize:9,color:C.textMuted,marginTop:2}}>{item.s}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Targets */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8,marginBottom:14}}>
+              {[
+                {l:"Kursziel 30 Tage",v:fmt(stock,stock.target30),u:stock.upside30,c:C.green+"20",b:C.green+"25"},
+                {l:"Kursziel 90 Tage",v:fmt(stock,stock.target90),u:stock.upside90,c:C.accent+"15",b:C.accent+"25"},
+              ].map((t,i)=>(
+                <div key={i} style={{background:t.c,border:`1px solid ${t.b}`,borderRadius:8,padding:"12px 14px"}}>
+                  <div style={{fontSize:10,color:C.textSub,fontWeight:500,marginBottom:5,textTransform:"uppercase",letterSpacing:0.5}}>{t.l}</div>
+                  <div style={{display:"flex",alignItems:"baseline",gap:8}}>
+                    <span style={{fontSize:18,fontWeight:700,fontFamily:"monospace",color:C.text}}>{t.v}</span>
+                    <span style={{color:t.u>=0?C.green:C.red,fontSize:12,fontWeight:600}}>{t.u>=0?"+":""}{t.u}%</span>
+                  </div>
+                  <div style={{fontSize:9,color:C.textMuted,marginTop:2}}>KI-Prognose · nicht garantiert</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Fundamentals */}
+            <FundamentalsPanel fund={stock.fundamentals} stock={stock}/>
+
+            {/* Dividend */}
+            <DividendPanel div={stock.dividend} stock={stock}/>
+
+            {/* AI Analysis */}
+            {loadingAI ? (
+              <div style={{background:C.bg,borderRadius:8,padding:"22px",textAlign:"center",marginBottom:14}}>
+                <div style={{fontSize:12,color:C.textSub,marginBottom:10}}>Analysiere Technische Daten · Fundamentaldaten · Dividenden...</div>
+                <div style={{display:"flex",gap:5,justifyContent:"center"}}>
+                  {[0,1,2].map(i=><div key={i} style={{width:6,height:6,borderRadius:"50%",background:C.accent,animation:`pulse 1.2s ${i*.2}s infinite`}}/>)}
+                </div>
               </div>
-              <div style={{fontSize:9,color:C.textMuted,marginTop:2}}>KI-Prognose · nicht garantiert</div>
+            ) : (
+              <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"16px 18px",fontSize:13,color:"#c8ccd8",lineHeight:1.9,marginBottom:14,whiteSpace:"pre-wrap"}}>{analysis}</div>
+            )}
+
+            {!loadingAI&&(
+              <div style={{marginBottom:14}}>
+                <div style={{fontSize:10,color:C.textSub,fontWeight:500,letterSpacing:1,marginBottom:6,textTransform:"uppercase"}}>KI-Konfidenz</div>
+                <ConfBar value={stock.confidence}/>
+              </div>
+            )}
+
+            <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0 0",borderTop:`1px solid ${C.border}`}}>
+              <span style={{fontSize:10,color:C.textMuted}}>Kurse: <span style={{color:stock.dataReal?C.green:C.textSub}}>{stock.dataSource}</span> · Fundamentals: FMP</span>
+              <span style={{fontSize:10,color:C.textMuted}}>Aktualisiert beim Laden</span>
             </div>
-          ))}
-        </div>
-
-        {/* Fundamentals */}
-        <FundamentalsPanel fund={stock.fundamentals} stock={stock}/>
-
-        {/* Dividend */}
-        <DividendPanel div={stock.dividend} stock={stock}/>
-
-        {/* AI Analysis */}
-        {loadingAI?(
-          <div style={{background:C.bg,borderRadius:8,padding:"22px",textAlign:"center",marginBottom:14}}>
-            <div style={{fontSize:12,color:C.textSub,marginBottom:10}}>Analysiere Technische Daten · Fundamentaldaten · Dividenden...</div>
-            <div style={{display:"flex",gap:5,justifyContent:"center"}}>
-              {[0,1,2].map(i=><div key={i} style={{width:6,height:6,borderRadius:"50%",background:C.accent,animation:`pulse 1.2s ${i*.2}s infinite`}}/>)}
-            </div>
-          </div>
-        ):(
-          <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"16px 18px",fontSize:13,color:"#c8ccd8",lineHeight:1.9,marginBottom:14,whiteSpace:"pre-wrap"}}>{analysis}</div>
+            <div style={{marginTop:10,fontSize:10,color:C.textMuted,lineHeight:1.6}}>{DISCLAIMER}</div>
+          </>
         )}
-
-        {!loadingAI&&<div style={{marginBottom:14}}><div style={{fontSize:10,color:C.textSub,fontWeight:500,letterSpacing:1,marginBottom:6,textTransform:"uppercase"}}>KI-Konfidenz</div><ConfBar value={stock.confidence}/></div>}
-
-        <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0 0",borderTop:`1px solid ${C.border}`}}>
-          <span style={{fontSize:10,color:C.textMuted}}>Kurse: <span style={{color:stock.dataReal?C.green:C.textSub}}>{stock.dataSource}</span> · Fundamentals: FMP</span>
-          <span style={{fontSize:10,color:C.textMuted}}>Aktualisiert beim Laden</span>
-        </div>
-        <div style={{marginTop:10,fontSize:10,color:C.textMuted,lineHeight:1.6}}>{DISCLAIMER}</div>
-        </> {/* end of !loadingStock block */}
       </div>
     </div>
   );
