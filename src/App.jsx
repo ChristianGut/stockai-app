@@ -76,17 +76,14 @@ async function yahooGet(path) {
   return null;
 }
 
-// Fetch quote + candles + dividends all in ONE Yahoo call using quoteSummary2
-async function fetchAllYahoo(ticker, range = "3mo", interval = "1d") {
-  // Chart endpoint (includes quote + OHLCV + dividends in events)
+// Fetch quote + candles for selected range
+async function fetchQuoteAndCandles(ticker, range = "3mo", interval = "1d") {
   const chartPath = `/v8/finance/chart/${encodeURIComponent(ticker)}?range=${range}&interval=${interval}&events=div&includePrePost=false`;
   const d = await yahooGet(chartPath);
   const result = d?.chart?.result?.[0];
-  if (!result) return null;
+  if (!result) return { quote: null, candles: null };
 
   const meta = result.meta ?? {};
-
-  // Quote
   const price     = meta.regularMarketPrice ?? null;
   const prevClose = meta.previousClose ?? meta.chartPreviousClose ?? null;
   const quote = {
@@ -97,11 +94,10 @@ async function fetchAllYahoo(ticker, range = "3mo", interval = "1d") {
     change: price && prevClose ? +((price - prevClose) / prevClose * 100).toFixed(2) : 0,
   };
 
-  // Candles
   const timestamps = result.timestamp ?? [];
   const ohlcv      = result.indicators?.quote?.[0] ?? {};
-  const closes     = ohlcv.close   ?? [];
-  const volumes    = ohlcv.volume  ?? [];
+  const closes     = ohlcv.close  ?? [];
+  const volumes    = ohlcv.volume ?? [];
 
   const candles = timestamps
     .map((ts, i) => {
@@ -116,40 +112,74 @@ async function fetchAllYahoo(ticker, range = "3mo", interval = "1d") {
     })
     .filter(Boolean);
 
-  // Dividends — from events
-  const divEvents = result.events?.dividends ?? {};
-  const divArr    = Object.values(divEvents).sort((a, b) => b.date - a.date);
-  let dividend    = { paysDividend: false };
+  return { quote, candles: candles.length ? candles : null };
+}
 
-  if (divArr.length > 0) {
-    const lastDiv   = divArr[0];
-    const lastAmt   = lastDiv.amount ?? null;
-    const lastDate  = lastDiv.date
+// Fetch dividends ALWAYS using 2y range so we get enough payments to detect frequency
+async function fetchDividends(ticker, currentPrice) {
+  try {
+    const path = `/v8/finance/chart/${encodeURIComponent(ticker)}?range=2y&interval=3mo&events=div&includePrePost=false`;
+    const d = await yahooGet(path);
+    const result = d?.chart?.result?.[0];
+    if (!result) return { paysDividend: false };
+
+    const divEvents = result.events?.dividends ?? {};
+    const divArr    = Object.values(divEvents)
+      .filter(x => x.amount > 0)
+      .sort((a, b) => b.date - a.date);
+
+    if (divArr.length === 0) return { paysDividend: false };
+
+    const lastDiv    = divArr[0];
+    const lastAmt    = lastDiv.amount ?? null;
+    const lastDate   = lastDiv.date
       ? new Date(lastDiv.date * 1000).toLocaleDateString("de-CH", { day: "2-digit", month: "2-digit", year: "numeric" })
       : null;
 
-    // Estimate annual rate from last 4 payments
-    const recent   = divArr.slice(0, 4);
-    const annualEst = recent.length >= 4
-      ? recent.reduce((s, d) => s + (d.amount ?? 0), 0)
-      : (lastAmt ?? 0) * recent.length;
-
-    // Frequency
+    // Frequency: look at gaps between all payments
     let frequency = "Jährlich";
     if (divArr.length >= 2) {
-      const daysBetween = (divArr[0].date - divArr[1].date) / 86400;
-      if (daysBetween < 40)       frequency = "Monatlich";
-      else if (daysBetween < 100) frequency = "Quartalsweise";
-      else if (daysBetween < 200) frequency = "Halbjährlich";
-      else                        frequency = "Jährlich";
+      // Average days between consecutive payments
+      const gaps = [];
+      for (let i = 0; i < Math.min(divArr.length - 1, 5); i++) {
+        gaps.push((divArr[i].date - divArr[i+1].date) / 86400);
+      }
+      const avgGap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+      if (avgGap < 40)       frequency = "Monatlich";
+      else if (avgGap < 100) frequency = "Quartalsweise";
+      else if (avgGap < 200) frequency = "Halbjährlich";
+      else                   frequency = "Jährlich";
     }
 
-    const yieldPct = price && annualEst ? +((annualEst / price) * 100).toFixed(2) : null;
+    // Annual rate: sum last 12 months of payments
+    const oneYearAgo  = Date.now() / 1000 - 365 * 86400;
+    const last12m     = divArr.filter(d => d.date >= oneYearAgo);
+    // If we don't have 12 months yet (new payer), extrapolate from frequency
+    const paymentsPerYear = frequency === "Monatlich" ? 12 : frequency === "Quartalsweise" ? 4 : frequency === "Halbjährlich" ? 2 : 1;
+    const annualRate  = last12m.length > 0
+      ? +last12m.reduce((s, d) => s + (d.amount ?? 0), 0).toFixed(4)
+      : +((lastAmt ?? 0) * paymentsPerYear).toFixed(4);
 
-    dividend = { paysDividend: true, lastAmount: lastAmt, lastExDate: lastDate, annualRate: +annualEst.toFixed(4), yieldPct, frequency };
+    const yieldPct = currentPrice && annualRate ? +((annualRate / currentPrice) * 100).toFixed(2) : null;
+
+    return { paysDividend: true, lastAmount: lastAmt, lastExDate: lastDate, annualRate, yieldPct, frequency, paymentsPerYear };
+  } catch {
+    return { paysDividend: false };
   }
+}
 
-  return { quote, candles: candles.length ? candles : null, dividend };
+// Fetch quote + candles + dividends — candles use selected range, dividends always use 2y
+async function fetchAllYahoo(ticker, range = "3mo", interval = "1d") {
+  const [{ quote, candles }, dividend] = await Promise.all([
+    fetchQuoteAndCandles(ticker, range, interval),
+    fetchDividends(ticker, null), // price passed after quote resolves
+  ]);
+  // Re-run dividend yield with actual price
+  let div = dividend;
+  if (div?.paysDividend && quote?.price && div.annualRate) {
+    div = { ...div, yieldPct: +((div.annualRate / quote.price) * 100).toFixed(2) };
+  }
+  return { quote, candles, dividend: div };
 }
 
 // Finnhub fallback for quote only
