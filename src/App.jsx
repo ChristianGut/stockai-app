@@ -124,62 +124,70 @@ async function finnhubGet(path) {
 // ─── FINANCIAL MODELING PREP ──────────────────────────────────────────────────
 // FMP provides fundamentals: P/E, P/B, margins, growth, analyst targets, ratings
 // Free plan: 250 requests/day, no proxy needed (CORS allowed)
+// ─── FINANCIAL MODELING PREP ──────────────────────────────────────────────────
+async function fmpGet(path) {
+  // FMP blocks direct browser requests — use proxy
+  const url = `https://financialmodelingprep.com/api/v3${path}&apikey=${FMP_KEY}`;
+  try {
+    // Try direct first (works in some environments)
+    const direct = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (direct.ok) {
+      const d = await direct.json();
+      if (!d?.["Error Message"] && !d?.error) return d;
+    }
+  } catch { /* fall through to proxy */ }
+  // Fallback: proxy
+  return proxyFetch(url, 7000);
+}
+
 async function fetchFundamentals(ticker) {
   try {
-    // For Swiss/EU tickers, FMP uses different format — try to normalize
-    // e.g. NESN.SW → NESN on some endpoints
-    const baseTicker = ticker.split(".")[0];
+    const baseTicker = ticker.split(".")[0]; // NESN.SW → NESN
 
-    const [profile, ratios, analysts] = await Promise.all([
-      fetch(`https://financialmodelingprep.com/api/v3/profile/${ticker}?apikey=${FMP_KEY}`, { signal: AbortSignal.timeout(6000) }).then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch(`https://financialmodelingprep.com/api/v3/ratios-ttm/${ticker}?apikey=${FMP_KEY}`, { signal: AbortSignal.timeout(6000) }).then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch(`https://financialmodelingprep.com/api/v3/price-target-consensus/${ticker}?apikey=${FMP_KEY}`, { signal: AbortSignal.timeout(6000) }).then(r => r.ok ? r.json() : null).catch(() => null),
-    ]);
+    // Try original ticker first, then base ticker for non-US stocks
+    const tryTickers = ticker.includes(".") ? [ticker, baseTicker] : [ticker];
+
+    let profile = null, ratios = null, analysts = null;
+
+    for (const t of tryTickers) {
+      const [p, r, a] = await Promise.all([
+        fmpGet(`/profile/${t}?`),
+        fmpGet(`/ratios-ttm/${t}?`),
+        fmpGet(`/price-target-consensus/${t}?`),
+      ]);
+      if (p?.[0]?.symbol) { profile = p; ratios = r; analysts = a; break; }
+    }
 
     const p = profile?.[0];
     const r = ratios?.[0];
     const a = analysts?.[0];
-
     if (!p) return null;
 
     return {
-      // Bewertung
-      pe:          r?.peRatioTTM        != null ? +r.peRatioTTM.toFixed(1)        : null,
-      pb:          r?.priceToBookRatioTTM != null ? +r.priceToBookRatioTTM.toFixed(2) : null,
-      ps:          r?.priceToSalesRatioTTM != null ? +r.priceToSalesRatioTTM.toFixed(2) : null,
-      ev_ebitda:   r?.enterpriseValueMultipleTTM != null ? +r.enterpriseValueMultipleTTM.toFixed(1) : null,
-
-      // Profitabilität
-      netMargin:   r?.netProfitMarginTTM != null ? +(r.netProfitMarginTTM * 100).toFixed(1) : null,
-      roe:         r?.returnOnEquityTTM  != null ? +(r.returnOnEquityTTM  * 100).toFixed(1) : null,
-      roa:         r?.returnOnAssetsTTM  != null ? +(r.returnOnAssetsTTM  * 100).toFixed(1) : null,
-      grossMargin: r?.grossProfitMarginTTM != null ? +(r.grossProfitMarginTTM * 100).toFixed(1) : null,
-
-      // Grösse
-      marketCap:   p.mktCap,
-      revenue:     p.revenueTTM,
-      employees:   p.fullTimeEmployees,
-
-      // Wachstum (aus Profil)
-      revenueGrowth: null, // wird separat geladen falls nötig
-
-      // Analysten
-      analystTarget:   a?.targetConsensus != null ? +a.targetConsensus.toFixed(2) : null,
-      analystHigh:     a?.targetHigh      != null ? +a.targetHigh.toFixed(2)      : null,
-      analystLow:      a?.targetLow       != null ? +a.targetLow.toFixed(2)       : null,
-      analystRating:   p.rating           ?? null,  // "Strong Buy", "Buy", "Hold" etc.
-
-      // Verschuldung
-      debtToEquity:    r?.debtEquityRatioTTM != null ? +r.debtEquityRatioTTM.toFixed(2) : null,
-      currentRatio:    r?.currentRatioTTM    != null ? +r.currentRatioTTM.toFixed(2)    : null,
-
-      // Info
-      description: p.description ?? null,
-      industry:    p.industry    ?? null,
-      country:     p.country     ?? null,
-      currency:    p.currency    ?? null,
+      pe:          r?.peRatioTTM          != null ? +r.peRatioTTM.toFixed(1)            : null,
+      pb:          r?.priceToBookRatioTTM != null ? +r.priceToBookRatioTTM.toFixed(2)   : null,
+      ps:          r?.priceToSalesRatioTTM!= null ? +r.priceToSalesRatioTTM.toFixed(2)  : null,
+      netMargin:   r?.netProfitMarginTTM  != null ? +(r.netProfitMarginTTM*100).toFixed(1) : null,
+      roe:         r?.returnOnEquityTTM   != null ? +(r.returnOnEquityTTM*100).toFixed(1)  : null,
+      grossMargin: r?.grossProfitMarginTTM!= null ? +(r.grossProfitMarginTTM*100).toFixed(1): null,
+      debtToEquity:r?.debtEquityRatioTTM  != null ? +r.debtEquityRatioTTM.toFixed(2)    : null,
+      currentRatio:r?.currentRatioTTM     != null ? +r.currentRatioTTM.toFixed(2)       : null,
+      marketCap:   p.mktCap   ?? null,
+      revenue:     p.revenueTTM ?? null,
+      employees:   p.fullTimeEmployees ?? null,
+      analystTarget: a?.targetConsensus != null ? +a.targetConsensus.toFixed(2) : null,
+      analystHigh:   a?.targetHigh      != null ? +a.targetHigh.toFixed(2)      : null,
+      analystLow:    a?.targetLow       != null ? +a.targetLow.toFixed(2)       : null,
+      analystRating: p.rating ?? null,
+      description:   p.description ?? null,
+      industry:      p.industry    ?? null,
+      country:       p.country     ?? null,
+      currency:      p.currency    ?? null,
     };
-  } catch { return null; }
+  } catch(e) {
+    console.warn("FMP error for", ticker, e.message);
+    return null;
+  }
 }
 
 // ─── SEARCH ───────────────────────────────────────────────────────────────────
