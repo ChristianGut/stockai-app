@@ -688,7 +688,95 @@ Dividende: ${stock.dividend?.paysDividend?"Ja, "+stock.dividend.yieldPct+"% Rend
   );
 }
 
-// ─── MOBILE CARD ──────────────────────────────────────────────────────────────
+// ─── PULL TO REFRESH ──────────────────────────────────────────────────────────
+function PullToRefresh({ onRefresh }) {
+  const [pulling, setPulling]   = useState(false);
+  const [distance, setDistance] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const startY   = useRef(0);
+  const threshold = 72;
+
+  useEffect(() => {
+    const el = document.documentElement;
+
+    function onTouchStart(e) {
+      if (el.scrollTop > 0) return;
+      startY.current = e.touches[0].clientY;
+      setPulling(true);
+    }
+
+    function onTouchMove(e) {
+      if (!pulling) return;
+      if (el.scrollTop > 0) { setDistance(0); return; }
+      const dy = e.touches[0].clientY - startY.current;
+      if (dy < 0) { setDistance(0); return; }
+      // Resistance: slows pull as you go further
+      setDistance(Math.min(dy * 0.45, threshold + 20));
+    }
+
+    function onTouchEnd() {
+      if (distance >= threshold && !refreshing) {
+        setRefreshing(true);
+        setDistance(threshold);
+        onRefresh(() => {
+          setRefreshing(false);
+          setDistance(0);
+          setPulling(false);
+        });
+      } else {
+        setDistance(0);
+        setPulling(false);
+      }
+    }
+
+    window.addEventListener("touchstart", onTouchStart, { passive: true });
+    window.addEventListener("touchmove",  onTouchMove,  { passive: true });
+    window.addEventListener("touchend",   onTouchEnd,   { passive: true });
+    return () => {
+      window.removeEventListener("touchstart", onTouchStart);
+      window.removeEventListener("touchmove",  onTouchMove);
+      window.removeEventListener("touchend",   onTouchEnd);
+    };
+  }, [pulling, distance, refreshing, onRefresh]);
+
+  if (distance === 0 && !refreshing) return null;
+
+  const ready = distance >= threshold;
+  return (
+    <div style={{
+      position: "fixed", top: 0, left: 0, right: 0, zIndex: 200,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      height: refreshing ? threshold : distance,
+      background: C.bg,
+      borderBottom: `1px solid ${C.border}`,
+      transition: refreshing ? "height 0.2s ease" : "none",
+      overflow: "hidden",
+    }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+        {refreshing ? (
+          <>
+            <div style={{ display: "flex", gap: 5 }}>
+              {[0,1,2].map(i => (
+                <div key={i} style={{ width: 6, height: 6, borderRadius: "50%", background: C.accent, animation: `pulse 1.2s ${i * 0.2}s infinite` }} />
+              ))}
+            </div>
+            <span style={{ fontSize: 11, color: C.textSub }}>Aktualisiere...</span>
+          </>
+        ) : (
+          <>
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none"
+              style={{ transform: `rotate(${ready ? 180 : 0}deg)`, transition: "transform 0.2s ease", color: ready ? C.accent : C.textMuted }}>
+              <path d="M10 4v12M10 16l-4-4M10 16l4-4" stroke={ready ? C.accent : C.textMuted} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            <span style={{ fontSize: 11, color: ready ? C.accent : C.textMuted }}>
+              {ready ? "Loslassen zum Aktualisieren" : "Nach unten ziehen..."}
+            </span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 function StockCard({stock,onAnalyze}){
   return(
     <div onClick={()=>onAnalyze(stock)} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px",cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.borderColor=C.borderHov} onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
@@ -798,9 +886,28 @@ export default function App(){
     if(s){setStocks(prev=>[s,...prev]);setSelected(s);}
   }
 
-  const buyCount=stocks.filter(s=>s.signal==="BUY").length;
+  const buyCount = stocks.filter(s => s.signal === "BUY").length;
+  const lastUpdated = stocks.length > 0 ? new Date().toLocaleTimeString("de-CH", { hour: "2-digit", minute: "2-digit" }) : null;
 
-  return(
+  async function refreshAll(done) {
+    setLoadingList(true);
+    setStocks([]);
+    setProgress(0);
+    const BATCH = 4;
+    const results = [];
+    for (let i = 0; i < DEFAULT_TICKERS.length; i += BATCH) {
+      const batch = DEFAULT_TICKERS.slice(i, i + BATCH);
+      const built = await Promise.all(batch.map(t => buildStock(t, "3M")));
+      built.forEach(s => { if (s) results.push(s); });
+      setStocks([...results]);
+      setProgress(Math.min(100, Math.round(((i + BATCH) / DEFAULT_TICKERS.length) * 100)));
+      if (i + BATCH < DEFAULT_TICKERS.length) await new Promise(r => setTimeout(r, 150));
+    }
+    setLoadingList(false);
+    if (done) done();
+  }
+
+  return (
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'Inter','Helvetica Neue',sans-serif",color:C.text}}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -812,6 +919,9 @@ export default function App(){
         input::placeholder{color:${C.textMuted};}
         table{width:100%;border-collapse:collapse;}
       `}</style>
+
+      {/* Pull to refresh — mobile only */}
+      {mobile && <PullToRefresh onRefresh={refreshAll} />}
 
       {/* HEADER */}
       <header style={{borderBottom:`1px solid ${C.border}`,padding:"0 20px",display:"flex",alignItems:"center",justifyContent:"space-between",height:54,position:"sticky",top:0,background:C.bg+"f0",backdropFilter:"blur(16px)",zIndex:100}}>
@@ -835,7 +945,9 @@ export default function App(){
           </div>
         )}
         <div style={{fontSize:11,color:C.textSub}}>
-          {loadingList?<span style={{color:C.accent}}>Lädt {progress}%</span>:<><span style={{color:C.green,fontWeight:600}}>{buyCount}</span> Kaufsignale</>}
+          {loadingList
+            ? <span style={{color:C.accent}}>Lädt {progress}%</span>
+            : <><span style={{color:C.green,fontWeight:600}}>{buyCount}</span> Kaufsignale{lastUpdated && mobile && <span style={{color:C.textMuted,marginLeft:6}}>· {lastUpdated}</span>}</>}
         </div>
       </header>
 
