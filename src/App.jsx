@@ -126,66 +126,88 @@ async function finnhubGet(path) {
 // Free plan: 250 requests/day, no proxy needed (CORS allowed)
 // ─── FINANCIAL MODELING PREP ──────────────────────────────────────────────────
 async function fmpGet(path) {
-  // FMP blocks direct browser requests — use proxy
-  const url = `https://financialmodelingprep.com/api/v3${path}&apikey=${FMP_KEY}`;
+  if (!FMP_KEY) return null;
+
+  // Approach 1: Our own Vercel serverless function (no CORS issues)
   try {
-    // Try direct first (works in some environments)
-    const direct = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    if (direct.ok) {
-      const d = await direct.json();
-      if (!d?.["Error Message"] && !d?.error) return d;
+    const r = await fetch(`/api/fmp?path=${encodeURIComponent(path)}`, { signal: AbortSignal.timeout(7000) });
+    if (r.ok) {
+      const d = await r.json();
+      if (Array.isArray(d) && d.length > 0) return d;
+      if (d && !d["Error Message"] && !d.error) return d;
     }
-  } catch { /* fall through to proxy */ }
-  // Fallback: proxy
-  return proxyFetch(url, 7000);
+  } catch { /* fall through */ }
+
+  // Approach 2: Direct fetch
+  const base = `https://financialmodelingprep.com/api/v3/${path}?apikey=${FMP_KEY}`;
+  try {
+    const r = await fetch(base, { signal: AbortSignal.timeout(6000) });
+    if (r.ok) {
+      const d = await r.json();
+      if (Array.isArray(d) && d.length > 0) return d;
+      if (d && !d["Error Message"] && !d.error) return d;
+    }
+  } catch { /* try proxy */ }
+
+  // Approach 3: allorigins proxy
+  try {
+    const r = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(base)}`, { signal: AbortSignal.timeout(8000) });
+    if (r.ok) {
+      const outer = await r.json();
+      if (outer.contents) {
+        const d = JSON.parse(outer.contents);
+        if (Array.isArray(d) && d.length > 0) return d;
+        if (d && !d["Error Message"] && !d.error) return d;
+      }
+    }
+  } catch { /* all failed */ }
+
+  return null;
 }
 
 async function fetchFundamentals(ticker) {
+  if (!FMP_KEY) return null;
   try {
-    const baseTicker = ticker.split(".")[0]; // NESN.SW → NESN
-
-    // Try original ticker first, then base ticker for non-US stocks
-    const tryTickers = ticker.includes(".") ? [ticker, baseTicker] : [ticker];
-
-    let profile = null, ratios = null, analysts = null;
+    const baseTicker = ticker.split(".")[0];
+    const tryTickers = ticker.includes(".") ? [baseTicker, ticker] : [ticker];
 
     for (const t of tryTickers) {
-      const [p, r, a] = await Promise.all([
-        fmpGet(`/profile/${t}?`),
-        fmpGet(`/ratios-ttm/${t}?`),
-        fmpGet(`/price-target-consensus/${t}?`),
+      const [profile, ratios, analysts] = await Promise.all([
+        fmpGet(`/profile/${t}`),
+        fmpGet(`/ratios-ttm/${t}`),
+        fmpGet(`/price-target-consensus/${t}`),
       ]);
-      if (p?.[0]?.symbol) { profile = p; ratios = r; analysts = a; break; }
+
+      const p = Array.isArray(profile) ? profile[0] : null;
+      const r = Array.isArray(ratios)  ? ratios[0]  : ratios;
+      const a = Array.isArray(analysts)? analysts[0]: analysts;
+
+      if (!p?.symbol) continue;
+
+      return {
+        pe:           r?.peRatioTTM           != null ? +Number(r.peRatioTTM).toFixed(1)            : null,
+        pb:           r?.priceToBookRatioTTM   != null ? +Number(r.priceToBookRatioTTM).toFixed(2)   : null,
+        netMargin:    r?.netProfitMarginTTM    != null ? +(Number(r.netProfitMarginTTM)*100).toFixed(1) : null,
+        roe:          r?.returnOnEquityTTM     != null ? +(Number(r.returnOnEquityTTM)*100).toFixed(1)  : null,
+        grossMargin:  r?.grossProfitMarginTTM  != null ? +(Number(r.grossProfitMarginTTM)*100).toFixed(1): null,
+        debtToEquity: r?.debtEquityRatioTTM    != null ? +Number(r.debtEquityRatioTTM).toFixed(2)    : null,
+        currentRatio: r?.currentRatioTTM       != null ? +Number(r.currentRatioTTM).toFixed(2)       : null,
+        marketCap:    p.mktCap    ?? null,
+        revenue:      p.revenueTTM ?? null,
+        employees:    p.fullTimeEmployees ?? null,
+        analystTarget:a?.targetConsensus != null ? +Number(a.targetConsensus).toFixed(2) : null,
+        analystHigh:  a?.targetHigh      != null ? +Number(a.targetHigh).toFixed(2)      : null,
+        analystLow:   a?.targetLow       != null ? +Number(a.targetLow).toFixed(2)       : null,
+        analystRating:p.rating ?? null,
+        currency:     p.currency ?? null,
+        industry:     p.industry ?? null,
+        country:      p.country  ?? null,
+        _source:      t, // debug: which ticker worked
+      };
     }
-
-    const p = profile?.[0];
-    const r = ratios?.[0];
-    const a = analysts?.[0];
-    if (!p) return null;
-
-    return {
-      pe:          r?.peRatioTTM          != null ? +r.peRatioTTM.toFixed(1)            : null,
-      pb:          r?.priceToBookRatioTTM != null ? +r.priceToBookRatioTTM.toFixed(2)   : null,
-      ps:          r?.priceToSalesRatioTTM!= null ? +r.priceToSalesRatioTTM.toFixed(2)  : null,
-      netMargin:   r?.netProfitMarginTTM  != null ? +(r.netProfitMarginTTM*100).toFixed(1) : null,
-      roe:         r?.returnOnEquityTTM   != null ? +(r.returnOnEquityTTM*100).toFixed(1)  : null,
-      grossMargin: r?.grossProfitMarginTTM!= null ? +(r.grossProfitMarginTTM*100).toFixed(1): null,
-      debtToEquity:r?.debtEquityRatioTTM  != null ? +r.debtEquityRatioTTM.toFixed(2)    : null,
-      currentRatio:r?.currentRatioTTM     != null ? +r.currentRatioTTM.toFixed(2)       : null,
-      marketCap:   p.mktCap   ?? null,
-      revenue:     p.revenueTTM ?? null,
-      employees:   p.fullTimeEmployees ?? null,
-      analystTarget: a?.targetConsensus != null ? +a.targetConsensus.toFixed(2) : null,
-      analystHigh:   a?.targetHigh      != null ? +a.targetHigh.toFixed(2)      : null,
-      analystLow:    a?.targetLow       != null ? +a.targetLow.toFixed(2)       : null,
-      analystRating: p.rating ?? null,
-      description:   p.description ?? null,
-      industry:      p.industry    ?? null,
-      country:       p.country     ?? null,
-      currency:      p.currency    ?? null,
-    };
+    return null;
   } catch(e) {
-    console.warn("FMP error for", ticker, e.message);
+    console.warn("FMP fetchFundamentals error:", ticker, e);
     return null;
   }
 }
