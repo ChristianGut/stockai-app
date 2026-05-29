@@ -374,7 +374,7 @@ function AIModal({ stock, onClose }) {
             "anthropic-dangerous-direct-browser-access": "true",
           },
           body: JSON.stringify({
-            model: "claude-sonnet-4-20250514",
+            model: "claude-sonnet-4-5",
             max_tokens: 1000,
             system: `Du bist ein präziser KI-Marktanalyst. Antworte auf Deutsch, ca. 200 Wörter. Nutze diese Struktur:
 
