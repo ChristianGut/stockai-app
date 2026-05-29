@@ -777,27 +777,85 @@ function PullToRefresh({ onRefresh }) {
     </div>
   );
 }
-function StockCard({stock,onAnalyze}){
-  return(
-    <div onClick={()=>onAnalyze(stock)} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px",cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.borderColor=C.borderHov} onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+function StockCard({stock, onAnalyze}) {
+  return (
+    <div
+      onClick={() => onAnalyze(stock)}
+      style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: "16px", cursor: "pointer" }}
+      onMouseEnter={e => e.currentTarget.style.borderColor = C.borderHov}
+      onMouseLeave={e => e.currentTarget.style.borderColor = C.border}
+    >
+      {/* Row 1: Ticker + Price */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
         <div>
-          <div style={{fontWeight:700,fontFamily:"monospace",fontSize:14,color:C.text}}>{stock.ticker}</div>
-          <div style={{fontSize:12,color:C.textSub,marginTop:1}}>{stock.name}</div>
-          <div style={{fontSize:10,color:C.textMuted}}>{stock.sector}</div>
+          <div style={{ fontWeight: 700, fontFamily: "monospace", fontSize: 15, color: C.text }}>{stock.ticker}</div>
+          <div style={{ fontSize: 12, color: C.textSub, marginTop: 1 }}>{stock.name}</div>
+          <div style={{ fontSize: 10, color: C.textMuted }}>{stock.sector}</div>
         </div>
-        <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
-          <div style={{fontWeight:700,fontFamily:"monospace",fontSize:15,color:C.text}}>${stock.price.toFixed(2)}</div>
-          <Chg v={stock.change}/>
+        <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 8 }}>
+          <div style={{ fontWeight: 700, fontFamily: "monospace", fontSize: 16, color: C.text }}>${stock.price.toFixed(2)}</div>
+          <Chg v={stock.change} />
+          {stock.high && <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>H ${stock.high.toFixed(2)} · T ${stock.low?.toFixed(2)}</div>}
         </div>
       </div>
-      <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginBottom:10}}>
-        <SignalBadge signal={stock.signal}/>
-        <span style={{fontSize:10,color:C.textSub}}>RSI <span style={{color:stock.lastRsi>70?C.red:stock.lastRsi<30?C.green:C.textSub,fontWeight:600}}>{stock.lastRsi}</span></span>
-        {stock.entryPrice&&<span style={{fontSize:10,color:C.purple}}>Entry <strong>${stock.entryPrice}</strong></span>}
-        <DividendCompact div={stock.dividend}/>
+
+      {/* Row 2: Signal + RSI */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+        <SignalBadge signal={stock.signal} />
+        <span style={{ fontSize: 11, color: C.textSub }}>
+          RSI <span style={{ color: stock.lastRsi > 70 ? C.red : stock.lastRsi < 30 ? C.green : C.textSub, fontWeight: 600 }}>{stock.lastRsi}</span>
+          <span style={{ color: C.textMuted, marginLeft: 4 }}>{stock.lastRsi > 70 ? "· Überkauft" : stock.lastRsi < 30 ? "· Überverkauft" : "· Neutral"}</span>
+        </span>
       </div>
-      <div style={{background:C.border,borderRadius:6,padding:"7px",textAlign:"center",fontSize:11,fontWeight:500,color:C.textSub}}>Chart & KI-Analyse</div>
+
+      {/* Row 3: Entry + StopLoss */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+        <div style={{ background: C.bg, borderRadius: 8, padding: "10px 12px", border: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 9, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 3 }}>Einstieg (Fib)</div>
+          <div style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 14, color: C.purple }}>
+            {stock.entryPrice ? `$${stock.entryPrice}` : "—"}
+          </div>
+        </div>
+        <div style={{ background: C.bg, borderRadius: 8, padding: "10px 12px", border: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 9, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 3 }}>Stop-Loss</div>
+          <div style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 14, color: C.red }}>${stock.stopLoss}</div>
+        </div>
+      </div>
+
+      {/* Row 4: Targets */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+        <div style={{ background: C.green + "0d", borderRadius: 8, padding: "10px 12px", border: `1px solid ${C.green}25` }}>
+          <div style={{ fontSize: 9, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 3 }}>Ziel 30 Tage</div>
+          <div style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 14, color: C.text }}>${stock.target30}</div>
+          <span style={{ fontSize: 11, color: stock.upside30 >= 0 ? C.green : C.red, fontWeight: 600 }}>{stock.upside30 >= 0 ? "+" : ""}{stock.upside30}%</span>
+        </div>
+        <div style={{ background: C.accent + "0d", borderRadius: 8, padding: "10px 12px", border: `1px solid ${C.accent}25` }}>
+          <div style={{ fontSize: 9, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 3 }}>Ziel 90 Tage</div>
+          <div style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 14, color: C.text }}>${stock.target90}</div>
+          <span style={{ fontSize: 11, color: stock.upside90 >= 0 ? C.green : C.red, fontWeight: 600 }}>{stock.upside90 >= 0 ? "+" : ""}{stock.upside90}%</span>
+        </div>
+      </div>
+
+      {/* Row 5: Dividend */}
+      {stock.dividend?.paysDividend ? (
+        <div style={{ background: C.amber + "0d", border: `1px solid ${C.amber}22`, borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
+          <div style={{ fontSize: 9, color: C.amber, textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600, marginBottom: 6 }}>Dividende</div>
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, color: C.text }}>Rendite: <strong style={{ color: C.amber }}>{stock.dividend.yieldPct != null ? stock.dividend.yieldPct + "%" : "—"}</strong></span>
+            <span style={{ fontSize: 12, color: C.text }}>Zahlung: <strong style={{ fontFamily: "monospace" }}>{stock.dividend.lastAmount != null ? "$" + stock.dividend.lastAmount.toFixed(4) : "—"}</strong></span>
+            <span style={{ fontSize: 12, color: C.text }}>{stock.dividend.frequency ?? ""}</span>
+          </div>
+        </div>
+      ) : (
+        <div style={{ marginBottom: 10 }}>
+          <span style={{ fontSize: 10, color: C.textMuted, background: C.border + "60", padding: "3px 8px", borderRadius: 4 }}>Keine Dividende</span>
+        </div>
+      )}
+
+      {/* CTA */}
+      <div style={{ background: C.accent + "18", border: `1px solid ${C.accent}30`, borderRadius: 8, padding: "9px", textAlign: "center", fontSize: 12, fontWeight: 600, color: C.accent }}>
+        Chart & KI-Analyse öffnen →
+      </div>
     </div>
   );
 }
