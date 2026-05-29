@@ -118,6 +118,50 @@ async function fetchYahooQuoteAndCandles(ticker, range = "3mo", interval = "1d")
   return { quote, candles: candles.length ? candles : null };
 }
 
+// ─── DIVIDEND DATA via Yahoo Finance ─────────────────────────────────────────
+// Fetches dividend yield, last payment amount, and frequency from Yahoo summary
+async function fetchDividendData(ticker) {
+  try {
+    const url = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(ticker)}?modules=summaryDetail,defaultKeyStatistics`;
+    const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+    const r = await fetch(proxy, { signal: AbortSignal.timeout(7000) });
+    const outer = await r.json();
+    if (!outer.contents) return null;
+    const d = JSON.parse(outer.contents);
+    const summary = d?.quoteSummary?.result?.[0]?.summaryDetail;
+    const stats   = d?.quoteSummary?.result?.[0]?.defaultKeyStatistics;
+    if (!summary) return null;
+
+    const yield_    = summary.dividendYield?.raw ?? null;
+    const rate      = summary.dividendRate?.raw  ?? null;
+    const lastDate  = summary.exDividendDate?.raw
+                        ? new Date(summary.exDividendDate.raw * 1000).toLocaleDateString("de-CH", { day: "2-digit", month: "2-digit", year: "numeric" })
+                        : null;
+    const freq      = summary.dividendRate?.raw && summary.dividendYield?.raw
+                        ? (() => {
+                            // Estimate frequency from payout ratio / rate
+                            const f = stats?.lastDividendValue?.raw;
+                            if (!f || !rate) return null;
+                            const timesPerYear = Math.round(rate / f);
+                            if (timesPerYear >= 11) return "Monatlich";
+                            if (timesPerYear >= 3)  return "Quartalsweise";
+                            if (timesPerYear >= 1)  return "Halbjährlich";
+                            return "Jährlich";
+                          })()
+                        : null;
+    const lastAmount = stats?.lastDividendValue?.raw ?? null;
+
+    return {
+      paysDividend: !!(rate && rate > 0),
+      yield:        yield_ ? +(yield_ * 100).toFixed(2) : null,   // in %
+      rate,                                                          // annual $ per share
+      lastAmount,                                                    // last single payment $
+      lastExDate:   lastDate,
+      frequency:    freq,
+    };
+  } catch { return null; }
+}
+
 // Finnhub as fallback for quote only (if Yahoo completely fails)
 async function fetchFinnhubQuote(ticker) {
   try {
@@ -210,20 +254,24 @@ function getEntry(price, fib) {
 // ─── BUILD FULL STOCK OBJECT ──────────────────────────────────────────────────
 async function buildStock(base, rangeLabel = "3M") {
   const tr = TIME_RANGES.find(t => t.label === rangeLabel) || TIME_RANGES[3];
-  let { quote, candles } = await fetchYahooQuoteAndCandles(base.yTicker || base.ticker, tr.range, tr.interval);
+  // Fetch candles and dividend data in parallel
+  const [{ quote, candles }, dividend] = await Promise.all([
+    fetchYahooQuoteAndCandles(base.yTicker || base.ticker, tr.range, tr.interval),
+    fetchDividendData(base.yTicker || base.ticker),
+  ]);
 
   // Fallback to Finnhub for quote if Yahoo fails
-  if (!quote?.price) {
-    quote = await fetchFinnhubQuote(base.ticker);
+  let resolvedQuote = quote;
+  if (!resolvedQuote?.price) {
+    resolvedQuote = await fetchFinnhubQuote(base.ticker);
   }
 
-  const price = quote?.price ?? null;
+  const price = resolvedQuote?.price ?? null;
   if (!price) return null;
 
   const chartData = addIndicators(candles ?? []);
   const hasRealCandles = chartData.length > 0;
 
-  // If no candles at all, we still show the stock with live price but note it
   const fib = hasRealCandles ? getFib(chartData) : { fib382: price*0.9, fib50: price*0.88, fib618: price*0.85 };
 
   const lastRsi  = hasRealCandles ? (chartData.filter(d => d.rsi != null).slice(-1)[0]?.rsi ?? 50) : 50;
@@ -232,12 +280,11 @@ async function buildStock(base, rangeLabel = "3M") {
   const lastMA50 = hasRealCandles ? chartData.filter(d => d.ma50 != null).slice(-1)[0]?.ma50 : null;
   const aboveMA50 = lastMA50 ? price > lastMA50 : null;
 
-  // Signal based on real indicators
   const pts =
     (lastRsi < 58 && lastRsi > 35 ? 1 : 0) +
     (macdCrossing === "bullish" ? 1 : 0) +
     (aboveMA50 === true ? 1 : 0) +
-    ((quote?.change ?? 0) > 0 ? 1 : 0);
+    ((resolvedQuote?.change ?? 0) > 0 ? 1 : 0);
 
   let signal, confidence;
   if (pts >= 3)      { signal = "BUY";   confidence = 75 + pts * 4; }
@@ -252,8 +299,8 @@ async function buildStock(base, rangeLabel = "3M") {
 
   return {
     ...base,
-    price, change: quote?.change ?? 0,
-    high: quote?.high, low: quote?.low, prevClose: quote?.prevClose,
+    price, change: resolvedQuote?.change ?? 0,
+    high: resolvedQuote?.high, low: resolvedQuote?.low, prevClose: resolvedQuote?.prevClose,
     chartData, fib, lastRsi, macdCrossing, aboveMA50,
     signal, confidence, stopLossPct: slPct,
     entryPrice: signal === "BUY" ? getEntry(price, fib) : null,
@@ -264,6 +311,7 @@ async function buildStock(base, rangeLabel = "3M") {
     dataReal: hasRealCandles,
     dataSource: hasRealCandles ? "Yahoo Finance (live)" : "Live price · Chart unavailable",
     currentRange: rangeLabel,
+    dividend: dividend ?? { paysDividend: false },
   };
 }
 
@@ -282,6 +330,57 @@ function SignalBadge({ signal }) {
 function Change({ value }) {
   const pos = value >= 0;
   return <span style={{ color: pos ? C.green : C.red, fontSize: 12, fontWeight: 500 }}>{pos ? "+" : ""}{value.toFixed(2)}%</span>;
+}
+
+function DividendBadge({ div, compact = false }) {
+  if (!div) return null;
+  if (!div.paysDividend) {
+    return (
+      <span style={{ background: C.textMuted+"20", color: C.textMuted, border: `1px solid ${C.border}`, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 500, whiteSpace: "nowrap" }}>
+        No Dividend
+      </span>
+    );
+  }
+  if (compact) {
+    return (
+      <span style={{ background: C.amber+"15", color: C.amber, border: `1px solid ${C.amber}25`, padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, whiteSpace: "nowrap" }}>
+        Div {div.yield ? div.yield + "%" : div.rate ? "$"+div.rate+"/yr" : "Yes"}
+      </span>
+    );
+  }
+  return (
+    <div style={{ background: C.amber+"0d", border: `1px solid ${C.amber}22`, borderRadius: 8, padding: "12px 16px" }}>
+      <div style={{ fontSize: 10, color: C.textSub, fontWeight: 500, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>Dividend</div>
+      <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: C.amber, fontFamily: "monospace" }}>{div.yield ? div.yield + "%" : "—"}</div>
+          <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>Annual Yield</div>
+        </div>
+        {div.lastAmount && (
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: C.text, fontFamily: "monospace" }}>${div.lastAmount.toFixed(4)}</div>
+            <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>Last Payment / Share</div>
+          </div>
+        )}
+        {div.rate && (
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: C.text, fontFamily: "monospace" }}>${div.rate.toFixed(2)}</div>
+            <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>Annual / Share</div>
+          </div>
+        )}
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{div.frequency ?? "—"}</div>
+          <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>Frequency</div>
+        </div>
+        {div.lastExDate && (
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{div.lastExDate}</div>
+            <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>Last Ex-Date</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function ConfBar({ value }) {
@@ -569,6 +668,11 @@ Datenbasis: ${stock.dataReal ? "Echte Marktdaten via Yahoo Finance" : "Live-Kurs
           ))}
         </div>
 
+        {/* Dividend */}
+        <div style={{ marginBottom: 16 }}>
+          <DividendBadge div={stock.dividend} />
+        </div>
+
         {/* AI text */}
         {loading ? (
           <div style={{ background: C.bg, borderRadius: 8, padding: "24px", textAlign: "center", marginBottom: 14 }}>
@@ -621,6 +725,7 @@ function StockCard({ stock, onAnalyze }) {
         <span style={{ fontSize: 11, color: C.textSub }}>RSI <span style={{ color: stock.lastRsi > 70 ? C.red : stock.lastRsi < 30 ? C.green : C.textSub, fontWeight: 600 }}>{stock.lastRsi}</span></span>
         {stock.entryPrice && <span style={{ fontSize: 11, color: C.purple }}>Entry <span style={{ fontWeight: 600 }}>${stock.entryPrice}</span></span>}
         <span style={{ fontSize: 11, color: C.textSub }}>30d <span style={{ color: C.green, fontWeight: 600 }}>${stock.target30}</span></span>
+        <DividendBadge div={stock.dividend} compact />
       </div>
       <div style={{ background: C.border, borderRadius: 6, padding: "8px", textAlign: "center", fontSize: 11, fontWeight: 500, color: C.textSub, letterSpacing: 0.3 }}>
         View Chart & AI Analysis
@@ -633,7 +738,7 @@ function StockCard({ stock, onAnalyze }) {
 function StockRow({ stock, onAnalyze, idx }) {
   return (
     <div onClick={() => onAnalyze(stock)}
-      style={{ display: "grid", gridTemplateColumns: "70px 1fr 100px 80px 70px 110px 100px 110px", padding: "13px 20px", borderBottom: `1px solid ${C.border}`, background: idx % 2 === 0 ? C.bg : C.surface, transition: "background .15s", alignItems: "center", cursor: "pointer" }}
+      style={{ display: "grid", gridTemplateColumns: "70px 1fr 100px 80px 70px 100px 90px 90px 110px", padding: "13px 20px", borderBottom: `1px solid ${C.border}`, background: idx % 2 === 0 ? C.bg : C.surface, transition: "background .15s", alignItems: "center", cursor: "pointer" }}
       onMouseEnter={e => e.currentTarget.style.background = "#141720"}
       onMouseLeave={e => e.currentTarget.style.background = idx % 2 === 0 ? C.bg : C.surface}>
       <div>
@@ -650,9 +755,10 @@ function StockRow({ stock, onAnalyze, idx }) {
         <div style={{ fontFamily: "monospace", fontWeight: 600, fontSize: 13, color: stock.lastRsi > 70 ? C.red : stock.lastRsi < 30 ? C.green : C.textSub }}>{stock.lastRsi}</div>
         <div style={{ fontSize: 9, color: stock.dataReal ? C.green+"99" : C.textMuted }}>{stock.dataReal ? "Live" : "Est."}</div>
       </div>
+      <div><DividendBadge div={stock.dividend} compact /></div>
       <div>
         {stock.entryPrice
-          ? <><div style={{ fontFamily: "monospace", fontWeight: 600, fontSize: 12, color: C.purple }}>${stock.entryPrice}</div><div style={{ fontSize: 9, color: C.textMuted }}>Fib Support</div></>
+          ? <><div style={{ fontFamily: "monospace", fontWeight: 600, fontSize: 12, color: C.purple }}>${stock.entryPrice}</div><div style={{ fontSize: 9, color: C.textMuted }}>Fib</div></>
           : <span style={{ color: C.textMuted, fontSize: 12 }}>—</span>}
       </div>
       <div>
@@ -846,8 +952,8 @@ export default function App() {
               </div>
               <div style={{ fontSize: 10, color: C.textMuted }}>Not investment advice</div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "70px 1fr 100px 80px 70px 110px 100px 110px", padding: "8px 20px", fontSize: 10, color: C.textMuted, fontWeight: 500, letterSpacing: 0.8, textTransform: "uppercase", borderBottom: `1px solid ${C.border}` }}>
-              <span>Ticker</span><span>Company</span><span>Price</span><span>Signal</span><span>RSI</span><span>Entry</span><span>30d Target</span><span></span>
+            <div style={{ display: "grid", gridTemplateColumns: "70px 1fr 100px 80px 70px 100px 90px 90px 110px", padding: "8px 20px", fontSize: 10, color: C.textMuted, fontWeight: 500, letterSpacing: 0.8, textTransform: "uppercase", borderBottom: `1px solid ${C.border}` }}>
+              <span>Ticker</span><span>Company</span><span>Price</span><span>Signal</span><span>RSI</span><span>Dividend</span><span>Entry</span><span>30d</span><span></span>
             </div>
             {stocks.map((s, i) => <StockRow key={s.ticker} stock={s} onAnalyze={setSelected} idx={i}/>)}
           </div>
