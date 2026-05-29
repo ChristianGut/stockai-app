@@ -108,13 +108,17 @@ async function finnhubGet(path) {
 }
 
 // ─── SEARCH ───────────────────────────────────────────────────────────────────
-// Uses Finnhub search (no proxy needed, reliable)
 async function searchStocks(q) {
   const d = await finnhubGet(`/search?q=${encodeURIComponent(q)}`);
   return (d?.result ?? [])
     .filter(x => x.type === "Common Stock" || x.type === "ETP" || x.type === "")
     .slice(0, 8)
-    .map(x => ({ ticker: x.symbol, name: x.description || x.symbol, sector: x.type || "Stock" }));
+    .map(x => ({
+      ticker: x.symbol,
+      name: x.description || x.symbol,
+      sector: x.type || "Stock",
+      // currency resolved later from Yahoo meta in buildStock
+    }));
 }
 
 // ─── YAHOO FINANCE DATA ───────────────────────────────────────────────────────
@@ -157,43 +161,32 @@ function parseYahooChart(d, range) {
 }
 
 async function fetchStockData(ticker, chartRange="3mo", chartInterval="1d") {
-  // ── Live quote: ALWAYS from Finnhub (direct, no proxy, real-time) ──────────
-  // Yahoo via proxy can return stale/cached prices — Finnhub is always fresh.
   const [fhQuote, chartData, divData] = await Promise.all([
     finnhubGet(`/quote?symbol=${ticker}`),
     yahooChart(ticker, chartRange, chartInterval),
     yahooChart(ticker, "2y", "3mo"),
   ]);
 
-  // Build quote from Finnhub first, fall back to Yahoo if Finnhub fails
+  // Currency: read from Yahoo meta (most reliable source)
+  const yahooCurrency = chartData?.chart?.result?.[0]?.meta?.currency ?? null;
+  const currency = yahooCurrency ?? (ticker.endsWith(".SW") ? "CHF" : ticker.endsWith(".DE") || ticker.endsWith(".AS") || ticker.endsWith(".PA") ? "EUR" : "USD");
+
   let quote = null;
   if (fhQuote?.c && fhQuote.c > 0) {
-    quote = {
-      price:     fhQuote.c,
-      change:    fhQuote.dp ?? 0,
-      prevClose: fhQuote.pc,
-      high:      fhQuote.h,
-      low:       fhQuote.l,
-    };
+    quote = { price: fhQuote.c, change: fhQuote.dp ?? 0, prevClose: fhQuote.pc, high: fhQuote.h, low: fhQuote.l };
   }
 
-  // Yahoo chart — used for candles + dividends only, NOT for the price
   const chart     = parseYahooChart(chartData, chartRange);
   const divParsed = parseYahooChart(divData, "2y");
 
-  // If Finnhub failed entirely, fall back to Yahoo price (last resort)
-  if (!quote?.price && chart?.quote?.price) {
-    quote = chart.quote;
-  }
+  if (!quote?.price && chart?.quote?.price) quote = chart.quote;
   if (!quote?.price) return null;
 
-  // Dividends — use the 2y data for accurate frequency + annual rate
   const divArr = divParsed?.divArr ?? chart?.divArr ?? [];
   let dividend = { paysDividend: false };
   if (divArr.length > 0) {
     const lastAmt  = divArr[0].amount;
     const lastDate = new Date(divArr[0].date*1000).toLocaleDateString("de-CH",{day:"2-digit",month:"2-digit",year:"numeric"});
-    // Frequency from average gap
     let frequency = "Jährlich";
     if (divArr.length >= 2) {
       const gaps = [];
@@ -204,7 +197,6 @@ async function fetchStockData(ticker, chartRange="3mo", chartInterval="1d") {
       else if (avg<200) frequency="Halbjährlich";
       else frequency="Jährlich";
     }
-    // Annual rate = sum of last 12 months
     const yr = Date.now()/1000 - 365*86400;
     const last12 = divArr.filter(d=>d.date>=yr);
     const perYear = frequency==="Monatlich"?12:frequency==="Quartalsweise"?4:frequency==="Halbjährlich"?2:1;
@@ -214,7 +206,7 @@ async function fetchStockData(ticker, chartRange="3mo", chartInterval="1d") {
   }
 
   const candles = chart?.candles ?? null;
-  return {quote, candles, dividend, hasChart:!!candles};
+  return {quote, candles, dividend, hasChart:!!candles, currency};
 }
 
 // ─── INDICATORS ───────────────────────────────────────────────────────────────
@@ -254,44 +246,105 @@ function getEntry(price,fib){
   return lvls.length?lvls[0]:+(price*0.965).toFixed(2);
 }
 
-// ─── BUILD STOCK ──────────────────────────────────────────────────────────────
 async function buildStock(base, rangeLabel="3M") {
   const tr=TIME_RANGES.find(t=>t.label===rangeLabel)||TIME_RANGES[3];
   const data = await fetchStockData(base.ticker, tr.range, tr.interval);
   if (!data) return null;
 
-  const {quote,candles,dividend,hasChart} = data;
+  const {quote, candles, dividend, hasChart, currency} = data;
   const price = quote.price;
   const chartData = addIndicators(candles ? [...candles] : []);
-  const real = chartData.length>0;
-  const fib  = real?getFib(chartData):{fib382:price*0.9,fib50:price*0.88,fib618:price*0.85};
-  const lastRsi  = real?(chartData.filter(d=>d.rsi!=null).slice(-1)[0]?.rsi??50):50;
-  const lastMacd = real?chartData.filter(d=>d.macd!=null).slice(-1)[0]:null;
-  const macdX    = (lastMacd?.macd??0)>(lastMacd?.macdSignal??0)?"bullish":"bearish";
-  const lastMA50 = real?chartData.filter(d=>d.ma50!=null).slice(-1)[0]?.ma50:null;
-  const aboveMA50= lastMA50?price>lastMA50:null;
+  const real = chartData.length > 0;
+  const fib  = real ? getFib(chartData) : {fib382:price*0.9, fib50:price*0.88, fib618:price*0.85};
 
-  const pts=(lastRsi<58&&lastRsi>35?1:0)+(macdX==="bullish"?1:0)+(aboveMA50===true?1:0)+((quote.change??0)>0?1:0);
-  let signal,confidence;
-  if(pts>=3){signal="BUY";confidence=75+pts*4;}
-  else if(pts===2){signal="HOLD";confidence=62+pts*4;}
-  else{signal="WATCH";confidence=45+pts*5;}
-  if(lastRsi>75){signal="WATCH";confidence=Math.min(confidence,60);}
-  confidence=Math.min(confidence,96);
+  const lastRsi  = real ? (chartData.filter(d=>d.rsi!=null).slice(-1)[0]?.rsi ?? 50) : 50;
+  const lastMacd = real ? chartData.filter(d=>d.macd!=null).slice(-1)[0] : null;
+  const macdX    = (lastMacd?.macd??0) > (lastMacd?.macdSignal??0) ? "bullish" : "bearish";
+  const lastMA50 = real ? chartData.filter(d=>d.ma50!=null).slice(-1)[0]?.ma50 : null;
+  const lastMA20 = real ? chartData.filter(d=>d.ma20!=null).slice(-1)[0]?.ma20 : null;
+  const aboveMA50 = lastMA50 ? price > lastMA50 : null;
+  const aboveMA20 = lastMA20 ? price > lastMA20 : null;
 
-  const slPct=0.07+Math.random()*0.03;
-  const u30=signal==="BUY"?+(6+Math.random()*14).toFixed(1):+((-2)-Math.random()*6).toFixed(1);
-  const u90=signal==="BUY"?+(14+Math.random()*18).toFixed(1):+((-5)-Math.random()*12).toFixed(1);
+  // ── Realistic signal logic ─────────────────────────────────────────────────
+  // Default is HOLD. BUY requires multiple strong confirmations.
+  // WATCH when indicators are negative.
+
+  let bullishCount = 0;
+  let bearishCount = 0;
+
+  // RSI signals
+  if (lastRsi < 45)                     bullishCount += 2; // clearly not overbought
+  else if (lastRsi >= 45 && lastRsi < 60) bullishCount += 1; // neutral-ish
+  else if (lastRsi >= 70)               bearishCount += 2; // overbought = caution
+  else if (lastRsi >= 60)               bearishCount += 1; // getting warm
+
+  // MACD
+  if (macdX === "bullish")  bullishCount += 1;
+  else                      bearishCount += 1;
+
+  // Price vs MA50 (trend)
+  if (aboveMA50 === true)   bullishCount += 1;
+  else if (aboveMA50 === false) bearishCount += 1;
+
+  // Price vs MA20 (momentum)
+  if (aboveMA20 === true)   bullishCount += 1;
+  else if (aboveMA20 === false) bearishCount += 1;
+
+  // Recent performance (today's change)
+  const chg = quote.change ?? 0;
+  if (chg > 1.5)       bullishCount += 1;
+  else if (chg < -1.5) bearishCount += 1;
+
+  // Signal decision — requires clear majority
+  let signal, confidence;
+  const score = bullishCount - bearishCount;
+
+  if (score >= 3 && lastRsi < 65) {
+    signal = "BUY";
+    confidence = Math.min(60 + score * 6, 92);
+  } else if (score <= -3 || lastRsi > 72) {
+    signal = "WATCH";
+    confidence = Math.min(50 + Math.abs(score) * 5, 85);
+  } else {
+    signal = "HOLD";
+    confidence = Math.min(55 + Math.abs(score) * 4, 80);
+  }
+
+  // No BUY if no real chart data (can't trust indicators)
+  if (!real && signal === "BUY") signal = "HOLD";
+
+  const slPct = 0.07 + Math.random() * 0.03;
+
+  // Targets only make sense when signal is clear
+  const u30 = signal === "BUY"
+    ? +(5 + Math.random() * 12).toFixed(1)
+    : signal === "WATCH"
+    ? +((-3) - Math.random() * 7).toFixed(1)
+    : +((-1) + Math.random() * 4).toFixed(1); // HOLD: small range
+  const u90 = signal === "BUY"
+    ? +(12 + Math.random() * 16).toFixed(1)
+    : signal === "WATCH"
+    ? +((-6) - Math.random() * 10).toFixed(1)
+    : +((-2) + Math.random() * 8).toFixed(1);
+
+  // Use currency from API, fall back to base definition, then USD
+  const resolvedCurrency = currency ?? base.currency ?? "USD";
 
   return {
-    ...base, price, change:quote.change??0, high:quote.high, low:quote.low, prevClose:quote.prevClose,
-    chartData, fib, lastRsi, macdCrossing:macdX, aboveMA50, signal, confidence, stopLossPct:slPct,
-    entryPrice:signal==="BUY"?getEntry(price,fib):null,
-    stopLoss:+(price*(1-slPct)).toFixed(2),
-    target30:+(price*(1+u30/100)).toFixed(2), target90:+(price*(1+u90/100)).toFixed(2),
-    upside30:u30, upside90:u90, dataReal:real, hasChart,
-    dataSource:real?"Yahoo Finance (live)":"Live Kurs (Chart nicht verfügbar)",
-    currentRange:rangeLabel, dividend,
+    ...base,
+    price, change: quote.change ?? 0,
+    high: quote.high, low: quote.low, prevClose: quote.prevClose,
+    chartData, fib, lastRsi, macdCrossing: macdX, aboveMA50, aboveMA20,
+    signal, confidence, stopLossPct: slPct,
+    entryPrice: signal === "BUY" ? getEntry(price, fib) : null,
+    stopLoss: +(price * (1 - slPct)).toFixed(2),
+    target30: +(price * (1 + u30/100)).toFixed(2),
+    target90: +(price * (1 + u90/100)).toFixed(2),
+    upside30: u30, upside90: u90,
+    dataReal: real, hasChart,
+    dataSource: real ? "Yahoo Finance (live)" : "Live Kurs (Chart nicht verfügbar)",
+    currentRange: rangeLabel, dividend,
+    currency: resolvedCurrency,
   };
 }
 
