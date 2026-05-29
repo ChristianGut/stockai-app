@@ -276,25 +276,57 @@ async function buildStock(base, rangeLabel="3M") {
 // ─── TOOLTIP COMPONENT ────────────────────────────────────────────────────────
 function InfoTooltip({text}) {
   const [show, setShow] = useState(false);
-  const ref = useRef(null);
+  const [pos, setPos]   = useState("below"); // "above" or "below"
+  const ref    = useRef(null);
+  const tipRef = useRef(null);
+
+  function handleShow(e) {
+    // Decide position based on available space
+    const rect = ref.current?.getBoundingClientRect();
+    if (rect) {
+      setPos(rect.top > 220 ? "above" : "below");
+    }
+    setShow(true);
+  }
+
   useEffect(()=>{
     if(!show) return;
     const fn=(e)=>{if(ref.current&&!ref.current.contains(e.target))setShow(false);};
     document.addEventListener("mousedown",fn);
     return()=>document.removeEventListener("mousedown",fn);
   },[show]);
+
+  const above = pos === "above";
+
   return (
-    <span ref={ref} style={{position:"relative",display:"inline-block",verticalAlign:"middle",marginLeft:5}}>
+    <span ref={ref} style={{position:"relative",display:"inline-flex",verticalAlign:"middle",marginLeft:4,flexShrink:0}}>
       <span
-        onClick={()=>setShow(s=>!s)}
-        onMouseEnter={()=>setShow(true)}
+        onClick={e=>{e.stopPropagation();setShow(s=>!s);handleShow(e);}}
+        onMouseEnter={handleShow}
         onMouseLeave={()=>setShow(false)}
-        style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:15,height:15,borderRadius:"50%",background:C.border,color:C.textSub,fontSize:9,fontWeight:700,cursor:"pointer",userSelect:"none",flexShrink:0}}
+        style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:15,height:15,borderRadius:"50%",background:"#1e293b",color:"#6b7280",fontSize:9,fontWeight:700,cursor:"pointer",userSelect:"none",flexShrink:0,border:"1px solid #2a3a50"}}
       >?</span>
       {show && (
-        <div style={{position:"absolute",bottom:"calc(100% + 8px)",left:"50%",transform:"translateX(-50%)",width:260,background:"#1a1f2e",border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px",fontSize:11,color:"#c8ccd8",lineHeight:1.6,zIndex:999,boxShadow:"0 8px 24px rgba(0,0,0,.5)",pointerEvents:"none"}}>
+        <div ref={tipRef} style={{
+          position:"fixed",
+          width:280,
+          background:"#131929",
+          border:"1px solid #2a3a50",
+          borderRadius:10,
+          padding:"12px 14px",
+          fontSize:12,
+          color:"#c8ccd8",
+          lineHeight:1.65,
+          zIndex:9999,
+          boxShadow:"0 8px 32px rgba(0,0,0,.7)",
+          pointerEvents:"none",
+          // Position is handled by a portal-like trick using ref
+          left: ref.current ? Math.min(ref.current.getBoundingClientRect().left - 130, window.innerWidth - 296) : 0,
+          top: above
+            ? (ref.current ? ref.current.getBoundingClientRect().top - 8 - 80 : 0)
+            : (ref.current ? ref.current.getBoundingClientRect().bottom + 8 : 0),
+        }}>
           {text}
-          <div style={{position:"absolute",top:"100%",left:"50%",transform:"translateX(-50%)",width:0,height:0,borderLeft:"5px solid transparent",borderRight:"5px solid transparent",borderTop:`5px solid #1a1f2e`}}/>
         </div>
       )}
     </span>
@@ -375,8 +407,11 @@ function DividendPanel({div}){
 }
 
 // ─── CHART ────────────────────────────────────────────────────────────────────
-function StockChart({stock,onRangeChange,currentRange,loadingChart}){
-  const[tab,setTab]=useState("price");
+function StockChart({stock, onRangeChange, currentRange, loadingChart}) {
+  const [tab, setTab] = useState("price");
+
+  // Reset to price tab when range or ticker changes
+  useEffect(() => { setTab("price"); }, [currentRange, stock.ticker]);
   const col=stock.signal==="BUY"?C.green:stock.signal==="WATCH"?C.red:C.textSub;
   const data=stock.chartData??[];
   const thin=data.length>120?data.filter((_,i)=>i%2===0):data;
@@ -503,18 +538,22 @@ function StockChart({stock,onRangeChange,currentRange,loadingChart}){
 
 // ─── AI MODAL ─────────────────────────────────────────────────────────────────
 function AIModal({stock:init,onClose}){
-  const[stock,setStock]=useState(init);
-  const[analysis,setAnalysis]=useState("");
-  const[loadingAI,setLoadingAI]=useState(true);
-  const[loadingChart,setLoadingChart]=useState(false);
-  const[range,setRange]=useState(init.currentRange||"3M");
+  const [stock, setStock]       = useState(init);
+  const [analysis, setAnalysis] = useState("");
+  const [loadingAI, setLoadingAI]       = useState(true);
+  const [loadingChart, setLoadingChart] = useState(false);
+  const [range, setRange] = useState(init.currentRange || "3M");
 
-  async function handleRange(r){
-    if(r===range)return;
+  async function handleRange(r) {
+    if (r === range) return;
     setRange(r);
     setLoadingChart(true);
-    const u=await buildStock({ticker:stock.ticker,name:stock.name,sector:stock.sector},r);
-    if(u)setStock(u);
+    // Force a fresh stock build with the new range — this fetches new candles from Yahoo
+    const updated = await buildStock(
+      { ticker: stock.ticker, name: stock.name, sector: stock.sector },
+      r
+    );
+    if (updated) setStock(updated);
     setLoadingChart(false);
   }
 
@@ -578,7 +617,13 @@ Dividende: ${stock.dividend?.paysDividend?"Ja, "+stock.dividend.yieldPct+"% Rend
 
         {/* Chart */}
         <div style={{marginBottom:14}}>
-          <StockChart stock={stock} onRangeChange={handleRange} currentRange={range} loadingChart={loadingChart}/>
+          <StockChart
+            key={`${stock.ticker}-${range}`}
+            stock={stock}
+            onRangeChange={handleRange}
+            currentRange={range}
+            loadingChart={loadingChart}
+          />
         </div>
 
         {/* Indicators */}
