@@ -1,12 +1,3 @@
-// api/market.js — Vercel Serverless Function
-// Handles ALL external API calls server-side — no CORS issues ever
-// Endpoints:
-//   /api/market?type=quote&ticker=AAPL
-//   /api/market?type=chart&ticker=AAPL&range=3mo&interval=1d
-//   /api/market?type=div&ticker=AAPL
-//   /api/market?type=fundamentals&ticker=AAPL
-//   /api/market?type=search&q=apple
-
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -19,82 +10,91 @@ export default async function handler(req, res) {
   try {
     switch (type) {
 
-      // ── Live quote from Finnhub ──────────────────────────────────────────────
       case "quote": {
-        const r = await fetch(
-          `https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${FINNHUB_KEY}`
-        );
+        const r = await fetch(`https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${FINNHUB_KEY}`);
         return res.json(await r.json());
       }
 
-      // ── Search from Finnhub ──────────────────────────────────────────────────
       case "search": {
-        const r = await fetch(
-          `https://finnhub.io/api/v1/search?q=${encodeURIComponent(q)}&token=${FINNHUB_KEY}`
-        );
+        const r = await fetch(`https://finnhub.io/api/v1/search?q=${encodeURIComponent(q)}&token=${FINNHUB_KEY}`);
         return res.json(await r.json());
       }
 
-      // ── Chart candles from Yahoo Finance ────────────────────────────────────
       case "chart": {
         const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=${range||"3mo"}&interval=${interval||"1d"}&events=div&includePrePost=false`;
         const r = await fetch(url, {
           headers: {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
             "Accept-Language": "en-US,en;q=0.9",
-          }
-        });
-        const data = await r.json();
-        return res.json(data);
-      }
-
-      // ── Dividends — 2 year chart for frequency detection ────────────────────
-      case "div": {
-        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=2y&interval=3mo&events=div&includePrePost=false`;
-        const r = await fetch(url, {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-            "Accept": "application/json",
+            "Referer": "https://finance.yahoo.com",
           }
         });
         return res.json(await r.json());
       }
 
-      // ── Fundamentals from FMP ────────────────────────────────────────────────
+      case "div": {
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=2y&interval=3mo&events=div&includePrePost=false`;
+        const r = await fetch(url, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Referer": "https://finance.yahoo.com",
+          }
+        });
+        return res.json(await r.json());
+      }
+
       case "fundamentals": {
-        const base = ticker.split(".")[0]; // NESN.SW → NESN
+        if (!FMP_KEY) return res.json({ ok: false, error: "FMP key missing in environment" });
+
+        const base = ticker.split(".")[0];
         const tryTickers = ticker.includes(".") ? [base, ticker] : [ticker];
 
+        // Debug: show what we're trying
+        const debug = { trying: tryTickers, fmpKeyLength: FMP_KEY.length, fmpKeyStart: FMP_KEY.substring(0, 4) };
+
         for (const t of tryTickers) {
-          const [profileRes, ratiosRes, analystRes] = await Promise.all([
-            fetch(`https://financialmodelingprep.com/api/v3/profile/${t}?apikey=${FMP_KEY}`),
-            fetch(`https://financialmodelingprep.com/api/v3/ratios-ttm/${t}?apikey=${FMP_KEY}`),
-            fetch(`https://financialmodelingprep.com/api/v3/price-target-consensus/${t}?apikey=${FMP_KEY}`),
+          const profileUrl = `https://financialmodelingprep.com/api/v3/profile/${t}?apikey=${FMP_KEY}`;
+          const ratiosUrl  = `https://financialmodelingprep.com/api/v3/ratios-ttm/${t}?apikey=${FMP_KEY}`;
+          const analystUrl = `https://financialmodelingprep.com/api/v3/price-target-consensus/${t}?apikey=${FMP_KEY}`;
+
+          const [pRes, rRes, aRes] = await Promise.all([
+            fetch(profileUrl),
+            fetch(ratiosUrl),
+            fetch(analystUrl),
           ]);
 
           const [profile, ratios, analyst] = await Promise.all([
-            profileRes.json().catch(() => null),
-            ratiosRes.json().catch(() => null),
-            analystRes.json().catch(() => null),
+            pRes.json().catch(e => ({ parseError: e.message })),
+            rRes.json().catch(e => ({ parseError: e.message })),
+            aRes.json().catch(e => ({ parseError: e.message })),
           ]);
 
-          const p = Array.isArray(profile) ? profile[0] : null;
-          if (!p?.symbol) continue;
+          // Check if FMP returned an error message
+          if (profile?.["Error Message"]) {
+            return res.json({ ok: false, error: profile["Error Message"], debug });
+          }
 
-          const r = Array.isArray(ratios) ? ratios[0] : (ratios || {});
+          const p = Array.isArray(profile) ? profile[0] : null;
+          if (!p?.symbol) {
+            // Return raw response for debugging
+            return res.json({ ok: false, error: "No profile data", rawProfile: profile, debug });
+          }
+
+          const r = Array.isArray(ratios)  ? ratios[0]  : (ratios || {});
           const a = Array.isArray(analyst) ? analyst[0] : (analyst || {});
 
           return res.json({ ok: true, ticker: t, profile: p, ratios: r, analyst: a });
         }
 
-        return res.json({ ok: false, error: "Ticker not found in FMP" });
+        return res.json({ ok: false, error: "Ticker not found in FMP", debug });
       }
 
       default:
         return res.status(400).json({ error: "Unknown type: " + type });
     }
   } catch (e) {
-    return res.status(500).json({ error: e.message, stack: e.stack });
+    return res.status(500).json({ error: e.message });
   }
 }
