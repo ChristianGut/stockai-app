@@ -3,100 +3,104 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  const FINNHUB_KEY = process.env.VITE_FINNHUB_KEY;
-  const FMP_KEY     = process.env.VITE_FMP_KEY;
-  const { type, ticker, range, interval, q } = req.query;
+  const FINNHUB_KEY   = process.env.VITE_FINNHUB_KEY;
+  const FMP_KEY       = process.env.VITE_FMP_KEY;
+  const ANTHROPIC_KEY = process.env.VITE_ANTHROPIC_KEY;
 
-  const YAHOO_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Origin": "https://finance.yahoo.com",
-    "Referer": "https://finance.yahoo.com/",
+  const { type, ticker, range, q } = req.query;
+
+  const ft = (url, opts={}, ms=7000) => {
+    const c = new AbortController();
+    const t = setTimeout(() => c.abort(), ms);
+    return fetch(url, { ...opts, signal: c.signal }).finally(() => clearTimeout(t));
   };
-
-  async function yahooFetch(path) {
-    // Try query1 first, then query2 as fallback
-    for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
-      try {
-        const r = await fetch(`https://${host}${path}`, { headers: YAHOO_HEADERS });
-        if (r.ok) {
-          const d = await r.json();
-          if (d?.chart?.result || d?.finance?.result) return d;
-        }
-      } catch { continue; }
-    }
-    return null;
-  }
 
   try {
     switch (type) {
 
+      // ── Quote from Finnhub ─────────────────────────────────────────────────
       case "quote": {
-        const r = await fetch(`https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${FINNHUB_KEY}`);
+        const r = await ft(`https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${FINNHUB_KEY}`);
         return res.json(await r.json());
       }
 
+      // ── Search from Finnhub ────────────────────────────────────────────────
       case "search": {
-        const r = await fetch(`https://finnhub.io/api/v1/search?q=${encodeURIComponent(q)}&token=${FINNHUB_KEY}`);
+        const r = await ft(`https://finnhub.io/api/v1/search?q=${encodeURIComponent(q)}&token=${FINNHUB_KEY}`);
         return res.json(await r.json());
       }
 
+      // ── Chart candles from Finnhub ─────────────────────────────────────────
+      // Resolution mapping for free plan:
+      // 1D → 60min, 1W → D, 1M → D, 3M → D, 1Y → W, 5Y → M
       case "chart": {
-        const r = range || "3mo";
-        const iv = interval || "1d";
-        const d = await yahooFetch(`/v8/finance/chart/${encodeURIComponent(ticker)}?range=${r}&interval=${iv}&events=div&includePrePost=false`);
-        if (!d) return res.status(502).json({ error: "Yahoo unavailable" });
-        return res.json(d);
+        const now = Math.floor(Date.now() / 1000);
+        const cfg = {
+          "1d":  { from: now - 86400*2,    res: "60" },
+          "5d":  { from: now - 86400*7,    res: "D"  },
+          "1mo": { from: now - 86400*31,   res: "D"  },
+          "3mo": { from: now - 86400*92,   res: "D"  },
+          "1y":  { from: now - 86400*366,  res: "W"  },
+          "5y":  { from: now - 86400*1830, res: "M"  },
+        }[range] || { from: now - 86400*92, res: "D" };
+
+        const sym = ticker.replace(".SW","").replace(".DE","").replace(".AS","").replace(".PA","").replace(".L","").replace(".MI","");
+
+        const r = await ft(`https://finnhub.io/api/v1/stock/candle?symbol=${sym}&resolution=${cfg.res}&from=${cfg.from}&to=${now}&token=${FINNHUB_KEY}`);
+        const d = await r.json();
+        if (d.s !== "ok") return res.json({ ok: false, status: d.s });
+        return res.json({ ok: true, c: d.c, t: d.t, v: d.v });
       }
 
+      // ── Dividends from Finnhub ─────────────────────────────────────────────
       case "div": {
-        const d = await yahooFetch(`/v8/finance/chart/${encodeURIComponent(ticker)}?range=2y&interval=3mo&events=div&includePrePost=false`);
-        if (!d) return res.status(502).json({ error: "Yahoo unavailable" });
-        return res.json(d);
+        const sym  = ticker.replace(".SW","").replace(".DE","").replace(".AS","").replace(".PA","");
+        const from = new Date(Date.now() - 86400000*730).toISOString().split("T")[0];
+        const to   = new Date().toISOString().split("T")[0];
+        const r    = await ft(`https://finnhub.io/api/v1/stock/dividend?symbol=${sym}&from=${from}&to=${to}&token=${FINNHUB_KEY}`);
+        const d    = await r.json();
+        return res.json({ ok: true, dividends: Array.isArray(d) ? d : [] });
       }
 
+      // ── Fundamentals from FMP (stable endpoints) ───────────────────────────
       case "fundamentals": {
-        if (!FMP_KEY) return res.json({ ok: false, error: "FMP key missing" });
-
-        const base = ticker.split(".")[0];
-        const tryTickers = ticker.includes(".") ? [base, ticker] : [ticker];
-
-        for (const t of tryTickers) {
+        if (!FMP_KEY) return res.json({ ok: false });
+        const sym = ticker.split(".")[0];
+        const tries = ticker.includes(".") ? [sym, ticker] : [ticker];
+        for (const t of tries) {
           try {
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 5000);
-
-            const [pRes, rRes, aRes] = await Promise.all([
-              fetch(`https://financialmodelingprep.com/stable/profile?symbol=${t}&apikey=${FMP_KEY}`, { signal: controller.signal }),
-              fetch(`https://financialmodelingprep.com/stable/ratios-ttm?symbol=${t}&apikey=${FMP_KEY}`, { signal: controller.signal }),
-              fetch(`https://financialmodelingprep.com/stable/price-target-consensus?symbol=${t}&apikey=${FMP_KEY}`, { signal: controller.signal }),
+            const [pR, rR, aR] = await Promise.all([
+              ft(`https://financialmodelingprep.com/stable/profile?symbol=${t}&apikey=${FMP_KEY}`, {}, 5000),
+              ft(`https://financialmodelingprep.com/stable/ratios-ttm?symbol=${t}&apikey=${FMP_KEY}`, {}, 5000),
+              ft(`https://financialmodelingprep.com/stable/price-target-consensus?symbol=${t}&apikey=${FMP_KEY}`, {}, 5000),
             ]);
-            clearTimeout(timeout);
-
-            const [profile, ratios, analyst] = await Promise.all([
-              pRes.json().catch(() => null),
-              rRes.json().catch(() => null),
-              aRes.json().catch(() => null),
-            ]);
-
-            if (profile?.["Error Message"] || profile?.["error"]) continue;
-
-            const p = Array.isArray(profile) ? profile[0] : (profile?.symbol ? profile : null);
-            if (!p?.symbol) continue;
-
-            const r = Array.isArray(ratios)  ? ratios[0]  : (ratios || {});
-            const a = Array.isArray(analyst) ? analyst[0] : (analyst || {});
-
-            return res.json({ ok: true, ticker: t, profile: p, ratios: r, analyst: a });
+            const [p, r, a] = await Promise.all([pR.json().catch(()=>null), rR.json().catch(()=>null), aR.json().catch(()=>null)]);
+            const prof = Array.isArray(p) ? p[0] : (p?.symbol ? p : null);
+            if (!prof?.symbol) continue;
+            return res.json({ ok: true, profile: prof, ratios: Array.isArray(r)?r[0]:(r||{}), analyst: Array.isArray(a)?a[0]:(a||{}) });
           } catch { continue; }
         }
-        return res.json({ ok: false, error: "Not found" });
+        return res.json({ ok: false });
+      }
+
+      // ── AI analysis proxied through server ────────────────────────────────
+      case "ai": {
+        const body = JSON.parse(req.body || "{}");
+        const r = await ft("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": ANTHROPIC_KEY,
+            "anthropic-version": "2023-06-01",
+          },
+          body: JSON.stringify(body),
+        }, 30000);
+        const d = await r.json();
+        return res.json(d);
       }
 
       default:
-        return res.status(400).json({ error: "Unknown type: " + type });
+        return res.status(400).json({ error: "Unknown type" });
     }
   } catch (e) {
     return res.status(500).json({ error: e.message });
