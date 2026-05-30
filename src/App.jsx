@@ -89,7 +89,7 @@ async function api(params, timeout = 10000) {
 // ─── DATA FETCHING ────────────────────────────────────────────────────────────
 async function fetchQuote(ticker) {
   try {
-    const d = await api({ type:"quote", ticker });
+    const d = await api({ type:"quote", ticker }, 5000);
     if (!d?.c || d.c === 0) return null;
     return { price:d.c, change:d.dp??0, prevClose:d.pc, high:d.h, low:d.l };
   } catch { return null; }
@@ -97,40 +97,40 @@ async function fetchQuote(ticker) {
 
 async function fetchChart(ticker, range="3mo", interval="1d") {
   try {
-    const d = await api({ type:"chart", ticker, range, interval });
+    const d = await api({ type:"chart", ticker, range, interval }, 8000);
     return parseYahooChart(d, range);
   } catch { return null; }
 }
 
 async function fetchDividends(ticker) {
   try {
-    const d = await api({ type:"div", ticker });
+    const d = await api({ type:"div", ticker }, 8000);
     return parseYahooChart(d, "2y");
   } catch { return null; }
 }
 
 async function fetchFundamentals(ticker) {
   try {
-    const d = await api({ type:"fundamentals", ticker }, 8000); // 8s max
+    const d = await api({ type:"fundamentals", ticker }, 6000);
     if (!d?.ok) return null;
     const p = d.profile, r = d.ratios, a = d.analyst;
     return {
-      pe:           r?.peRatioTTM           != null ? +Number(r.peRatioTTM).toFixed(1)              : null,
-      pb:           r?.priceToBookRatioTTM   != null ? +Number(r.priceToBookRatioTTM).toFixed(2)     : null,
-      netMargin:    r?.netProfitMarginTTM    != null ? +(Number(r.netProfitMarginTTM)*100).toFixed(1) : null,
-      roe:          r?.returnOnEquityTTM     != null ? +(Number(r.returnOnEquityTTM)*100).toFixed(1)  : null,
-      grossMargin:  r?.grossProfitMarginTTM  != null ? +(Number(r.grossProfitMarginTTM)*100).toFixed(1): null,
-      debtToEquity: r?.debtEquityRatioTTM    != null ? +Number(r.debtEquityRatioTTM).toFixed(2)      : null,
+      pe:           r?.peRatioTTM           != null ? +Number(r.peRatioTTM).toFixed(1)               : null,
+      pb:           r?.priceToBookRatioTTM  != null ? +Number(r.priceToBookRatioTTM).toFixed(2)      : null,
+      netMargin:    r?.netProfitMarginTTM   != null ? +(Number(r.netProfitMarginTTM)*100).toFixed(1)  : null,
+      roe:          r?.returnOnEquityTTM    != null ? +(Number(r.returnOnEquityTTM)*100).toFixed(1)   : null,
+      grossMargin:  r?.grossProfitMarginTTM != null ? +(Number(r.grossProfitMarginTTM)*100).toFixed(1): null,
+      debtToEquity: r?.debtEquityRatioTTM   != null ? +Number(r.debtEquityRatioTTM).toFixed(2)       : null,
       marketCap:    p?.mktCap    ?? null,
       revenue:      p?.revenueTTM ?? null,
       analystTarget:a?.targetConsensus != null ? +Number(a.targetConsensus).toFixed(2) : null,
       analystHigh:  a?.targetHigh      != null ? +Number(a.targetHigh).toFixed(2)      : null,
       analystLow:   a?.targetLow       != null ? +Number(a.targetLow).toFixed(2)       : null,
-      analystRating:p?.rating  ?? null,
-      currency:     p?.currency ?? null,
-      industry:     p?.industry ?? null,
+      analystRating:p?.rating   ?? null,
+      currency:     p?.currency  ?? null,
+      industry:     p?.industry  ?? null,
     };
-  } catch(e) { console.warn("FMP error", ticker, e); return null; }
+  } catch { return null; }
 }
 
 async function searchStocks(q) {
@@ -215,13 +215,16 @@ function getEntry(price,fib){
 async function buildStock(base, rangeLabel="3M") {
   const tr = TIME_RANGES.find(t=>t.label===rangeLabel)||TIME_RANGES[3];
 
-  // All 4 calls go through /api/market serverless function
-  // fundamentals is optional — if it times out, show stock anyway
+  // Phase 1: Load quote + chart + dividends in parallel (fast, via serverless)
+  // Phase 2: Fundamentals in parallel but with strict 6s timeout — never blocks
   const [quote, chartRaw, divRaw, fundamentals] = await Promise.all([
     fetchQuote(base.ticker),
     fetchChart(base.ticker, tr.range, tr.interval),
     fetchDividends(base.ticker),
-    fetchFundamentals(base.ticker).catch(() => null), // never block on FMP failure
+    Promise.race([
+      fetchFundamentals(base.ticker),
+      new Promise(resolve => setTimeout(() => resolve(null), 6000)), // hard 6s cap
+    ]),
   ]);
 
   const price = quote?.price ?? chartRaw?.quote?.price ?? null;
