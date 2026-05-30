@@ -79,9 +79,9 @@ const TIPS = {
 
 // ─── BACKEND API ──────────────────────────────────────────────────────────────
 // All external API calls go through /api/market — no CORS issues
-async function api(params) {
+async function api(params, timeout = 10000) {
   const qs = new URLSearchParams(params).toString();
-  const r = await fetch(`/api/market?${qs}`, { signal: AbortSignal.timeout(10000) });
+  const r = await fetch(`/api/market?${qs}`, { signal: AbortSignal.timeout(timeout) });
   if (!r.ok) throw new Error(`API ${r.status}`);
   return r.json();
 }
@@ -111,7 +111,7 @@ async function fetchDividends(ticker) {
 
 async function fetchFundamentals(ticker) {
   try {
-    const d = await api({ type:"fundamentals", ticker });
+    const d = await api({ type:"fundamentals", ticker }, 8000); // 8s max
     if (!d?.ok) return null;
     const p = d.profile, r = d.ratios, a = d.analyst;
     return {
@@ -216,11 +216,12 @@ async function buildStock(base, rangeLabel="3M") {
   const tr = TIME_RANGES.find(t=>t.label===rangeLabel)||TIME_RANGES[3];
 
   // All 4 calls go through /api/market serverless function
+  // fundamentals is optional — if it times out, show stock anyway
   const [quote, chartRaw, divRaw, fundamentals] = await Promise.all([
     fetchQuote(base.ticker),
     fetchChart(base.ticker, tr.range, tr.interval),
     fetchDividends(base.ticker),
-    fetchFundamentals(base.ticker),
+    fetchFundamentals(base.ticker).catch(() => null), // never block on FMP failure
   ]);
 
   const price = quote?.price ?? chartRaw?.quote?.price ?? null;
